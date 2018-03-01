@@ -12,7 +12,7 @@ C Header          Scala Native Module
 `aio.h`_          N/A
 `arpa/inet.h`_    scala.scalanative.posix.arpa.inet_
 `assert.h`_       N/A
-`complex.h`_      N/A
+`complex.h`_      scala.scalanative.native.complex_
 `cpio.h`_         scala.scalanative.posix.cpio_
 `ctype.h`_        N/A
 `dirent.h`_       scala.scalanative.posix.dirent_
@@ -57,7 +57,7 @@ C Header          Scala Native Module
 `stddef.h`_       N/A
 `stdint.h`_       N/A
 `stdio.h`_        N/A
-`stdlib.h`_       N/A
+`stdlib.h`_       scala.scalanative.posix.stdlib_
 `string.h`_       N/A
 `strings.h`_      N/A
 `stropts.h`_      N/A
@@ -177,6 +177,7 @@ C Header          Scala Native Module
 .. _wordexp.h: http://pubs.opengroup.org/onlinepubs/9699919799/basedefs/wordexp.h.html
 
 .. _scala.scalanative.posix.arpa.inet: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/arpa/inet.scala
+.. _scala.scalanative.native.complex: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/native/complex.scala
 .. _scala.scalanative.posix.cpio: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/cpio.scala
 .. _scala.scalanative.posix.dirent: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/dirent.scala
 .. _scala.scalanative.posix.errno: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/errno.scala
@@ -187,6 +188,7 @@ C Header          Scala Native Module
 .. _scala.scalanative.posix.netinet.in: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/netinet/in.scala
 .. _scala.scalanative.posix.pwd: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/pwd.scala
 .. _scala.scalanative.posix.regex: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/regex.scala
+.. _scala.scalanative.posix.stdlib: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/stdlib.scala
 .. _scala.scalanative.posix.sys.socket: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/sys/socket.scala
 .. _scala.scalanative.posix.sys.stat: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/sys/stat.scala
 .. _scala.scalanative.posix.sys.time: https://github.com/scala-native/scala-native/blob/master/nativelib/src/main/scala/scala/scalanative/posix/sys/time.scala
