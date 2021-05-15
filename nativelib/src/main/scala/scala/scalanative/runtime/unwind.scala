@@ -1,7 +1,7 @@
 package scala.scalanative
 package runtime
 
-import native._
+import scalanative.unsafe._
 
 @extern
 object unwind {
@@ -21,6 +21,6 @@ object unwind {
               reg: CInt,
               valp: Ptr[CUnsignedLongLong]): CInt = extern
 
-  @name("scalanative_UNW_REG_IP")
+  @name("scalanative_unw_reg_ip")
   def UNW_REG_IP: CInt = extern
 }

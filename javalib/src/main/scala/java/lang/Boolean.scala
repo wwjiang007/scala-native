@@ -8,7 +8,12 @@ final class Boolean(val _value: scala.Boolean) extends Comparable[Boolean] {
     this(Boolean.parseBoolean(s))
 
   @inline override def equals(that: Any): scala.Boolean =
-    this eq that.asInstanceOf[AnyRef]
+    (this eq that.asInstanceOf[AnyRef]) || (that match {
+      case other: Boolean =>
+        _value == other._value
+      case _ =>
+        false
+    })
 
   @inline override def hashCode(): Int =
     Boolean.hashCode(_value)
@@ -38,7 +43,8 @@ final class Boolean(val _value: scala.Boolean) extends Comparable[Boolean] {
 }
 
 object Boolean {
-  final val TYPE           = classOf[scala.Boolean]
+  final val TYPE =
+    scala.Predef.classOf[scala.scalanative.runtime.PrimitiveBoolean]
   final val TRUE: Boolean  = new Boolean(true)
   final val FALSE: Boolean = new Boolean(false)
 

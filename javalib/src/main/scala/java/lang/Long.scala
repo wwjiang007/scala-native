@@ -1,6 +1,7 @@
 package java.lang
 
-import scalanative.runtime.{divULong, remULong, undefined, Intrinsics}
+import scalanative.runtime.Intrinsics.{divULong, remULong}
+import scalanative.runtime.LLVMIntrinsics
 
 final class Long(val _value: scala.Long) extends Number with Comparable[Long] {
   @inline def this(s: String) =
@@ -81,7 +82,7 @@ final class Long(val _value: scala.Long) extends Number with Comparable[Long] {
   protected def unary_+ : scala.Long = _value
   protected def unary_- : scala.Long = -_value
 
-  protected def +(x: String): String = _value + x
+  protected def +(x: String): String = "" + _value + x
 
   protected def <<(x: scala.Int): scala.Long   = _value << x
   protected def <<(x: scala.Long): scala.Long  = _value << x
@@ -182,14 +183,14 @@ final class Long(val _value: scala.Long) extends Number with Comparable[Long] {
 }
 
 object Long {
-  final val TYPE      = classOf[scala.Long]
+  final val TYPE      = scala.Predef.classOf[scala.scalanative.runtime.PrimitiveLong]
   final val MIN_VALUE = -9223372036854775808L
   final val MAX_VALUE = 9223372036854775807L
   final val SIZE      = 64
   final val BYTES     = 8
 
   @inline def bitCount(l: scala.Long): scala.Int =
-    Intrinsics.`llvm.ctpop.i64`(l).toInt
+    LLVMIntrinsics.`llvm.ctpop.i64`(l).toInt
 
   @inline def compare(x: scala.Long, y: scala.Long): scala.Int =
     if (x == y) 0
@@ -199,51 +200,48 @@ object Long {
   @inline def compareUnsigned(x: scala.Long, y: scala.Long): scala.Int =
     compare(x ^ scala.Long.MinValue, y ^ scala.Long.MinValue)
 
+  private def fail(s: String): Nothing =
+    throw new NumberFormatException(s"""For input string: "$s"""")
+
   def decode(nm: String): Long = {
+    if (nm == null)
+      throw new NumberFormatException("null")
     val length = nm.length()
-    if (length == 0) {
-      throw new NumberFormatException()
-    } else {
-      var i          = 0
-      var firstDigit = nm.charAt(i)
-      val negative   = firstDigit == '-'
+    if (length == 0) fail(nm)
 
-      if (negative) {
-        if (length == 1) {
-          throw new NumberFormatException(nm)
-        }
+    var i          = 0
+    var firstDigit = nm.charAt(i)
+    val negative   = firstDigit == '-'
+    val positive   = firstDigit == '+'
 
-        i += 1
-        firstDigit = nm.charAt(i)
-      }
-
-      var base = 10
-      if (firstDigit == '0') {
-        i += 1
-        if (i == length) {
-          return valueOf(0L)
-        }
-
-        firstDigit = nm.charAt(i)
-        if (firstDigit == 'x' || firstDigit == 'X') {
-          if (i == length) {
-            throw new NumberFormatException(nm)
-          }
-          i += 1
-          base = 16
-        } else {
-          base = 8
-        }
-      } else if (firstDigit == '#') {
-        if (i == length) {
-          throw new NumberFormatException(nm)
-        }
-        i += 1
-        base = 16
-      }
-
-      valueOf(parse(nm, i, base, negative))
+    if (negative || positive) {
+      if (length == 1) fail(nm)
+      i += 1
+      firstDigit = nm.charAt(i)
     }
+
+    var base = 10
+    if (firstDigit == '0') {
+      i += 1
+      if (i == length) {
+        return valueOf(0L)
+      }
+
+      firstDigit = nm.charAt(i)
+      if (firstDigit == 'x' || firstDigit == 'X') {
+        i += 1
+        if (i == length) fail(nm)
+        base = 16
+      } else {
+        base = 8
+      }
+    } else if (firstDigit == '#') {
+      i += 1
+      if (i == length) fail(nm)
+      base = 16
+    }
+
+    valueOf(parse(nm, i, base, negative))
   }
 
   @inline
@@ -292,27 +290,32 @@ object Long {
     Math.min(a, b)
 
   @inline def numberOfLeadingZeros(l: scala.Long): Int =
-    Intrinsics.`llvm.ctlz.i64`(l, iszeroundef = false).toInt
+    LLVMIntrinsics.`llvm.ctlz.i64`(l, iszeroundef = false).toInt
 
   @inline def numberOfTrailingZeros(l: scala.Long): Int =
-    Intrinsics.`llvm.cttz.i64`(l, iszeroundef = false).toInt
+    LLVMIntrinsics.`llvm.cttz.i64`(l, iszeroundef = false).toInt
 
   @inline def parseLong(s: String): scala.Long =
     parseLong(s, 10)
 
   @inline def parseLong(s: String, radix: Int): scala.Long = {
-    if (s == null || radix < Character.MIN_RADIX ||
-        radix > Character.MAX_RADIX) throw new NumberFormatException(s)
+    if (s == null)
+      throw new NumberFormatException("null")
+    if (radix < Character.MIN_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix less than Character.MIN_RADIX")
+    if (radix > Character.MAX_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix greater than Character.MAX_RADIX")
 
     val length = s.length()
 
-    if (length == 0) throw new NumberFormatException(s)
+    if (length == 0) fail(s)
 
     val negative    = s.charAt(0) == '-'
     val hasPlusSign = s.charAt(0) == '+'
 
-    if ((negative || hasPlusSign) && length == 1)
-      throw new NumberFormatException(s)
+    if ((negative || hasPlusSign) && length == 1) fail(s)
 
     val offset = if (negative || hasPlusSign) 1 else 0
 
@@ -330,18 +333,16 @@ object Long {
     while (offset < length) {
       val digit = Character.digit(s.charAt(offset), radix)
       offset += 1
-      if (digit == -1) throw new NumberFormatException(s)
-      if (max > result) throw new NumberFormatException(s)
+      if (digit == -1) fail(s)
+      if (max > result) fail(s)
       val next = result * radix - digit
-      if (next > result) throw new NumberFormatException(s)
+      if (next > result) fail(s)
       result = next
     }
 
     if (!negative) {
       result = -result
-      if (result < 0) {
-        throw new NumberFormatException(s)
-      }
+      if (result < 0) throw fail(s)
     }
 
     result
@@ -352,10 +353,10 @@ object Long {
     remULong(dividend, divisor)
 
   @inline def reverse(l: scala.Long): scala.Long =
-    Intrinsics.`llvm.bitreverse.i64`(l)
+    LLVMIntrinsics.`llvm.bitreverse.i64`(l)
 
   @inline def reverseBytes(l: scala.Long): scala.Long =
-    Intrinsics.`llvm.bswap.i64`(l)
+    LLVMIntrinsics.`llvm.bswap.i64`(l)
 
   @inline def rotateLeft(i: scala.Long, distance: scala.Int): scala.Long =
     (i << distance) | (i >>> -distance)
@@ -496,16 +497,24 @@ object Long {
     parseUnsignedLong(s, 10)
 
   def parseUnsignedLong(s: String, radix: Int): scala.Long = {
-    if (s == null || radix < Character.MIN_RADIX ||
-        radix > Character.MAX_RADIX) throw new NumberFormatException(s)
+    if (s == null)
+      throw new NumberFormatException("null")
+    if (radix < Character.MIN_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix less than Character.MIN_RADIX")
+    if (radix > Character.MAX_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix greater than Character.MAX_RADIX")
 
     val len = s.length()
+    if (len == 0) fail(s)
 
-    if (len == 0) throw new NumberFormatException(s)
-
-    val hasPlusSign = s.charAt(0) == '+'
-
-    if (hasPlusSign && len == 1) throw new NumberFormatException(s)
+    val hasPlusSign  = s.charAt(0) == '+'
+    val hasMinusSign = s.charAt(0) == '-'
+    if ((hasPlusSign || hasMinusSign) && len == 1) fail(s)
+    if (hasMinusSign)
+      throw new NumberFormatException(
+        s"""Illegal leading minus sign on unsigned string $s.""")
 
     val offset = if (hasPlusSign) 1 else 0
 
@@ -523,14 +532,15 @@ object Long {
       val digit = Character.digit(s.charAt(offset), radix)
       offset += 1
 
-      if (digit == -1) throw new NumberFormatException(s)
+      if (digit == -1) fail(s)
 
-      if (compareUnsigned(result, max) > 0) throw new NumberFormatException(s)
+      if (compareUnsigned(result, max) > 0) fail(s)
 
       result = result * radix + digit
 
       if (compareUnsigned(digit, result) > 0)
-        throw new NumberFormatException(s)
+        throw new NumberFormatException(
+          s"""String value $s exceeds range of unsigned long.""")
     }
 
     result

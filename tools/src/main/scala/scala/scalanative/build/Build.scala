@@ -1,7 +1,8 @@
 package scala.scalanative
 package build
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
+import scala.scalanative.util.Scope
 
 /** Utility methods for building code using Scala Native. */
 object Build {
@@ -19,27 +20,27 @@ object Build {
    *  val workdir: Path        = ...
    *  val main: String         = ...
    *
-   *  val clang     = Discover.clang()
-   *  val clangpp   = Discover.clangpp()
-   *  val linkopts  = Discover.linkingOptions()
-   *  val compopts  = Discover.compileOptions()
-   *  val triple    = Discover.targetTriple(clang, workdir)
-   *  val nativelib = Discover.nativelib(classpath).get
-   *  val outpath   = workdir.resolve("out")
+   *  val clang    = Discover.clang()
+   *  val clangpp  = Discover.clangpp()
+   *  val linkopts = Discover.linkingOptions()
+   *  val compopts = Discover.compileOptions()
+   *
+   *  val outpath  = workdir.resolve("out")
    *
    *  val config =
    *    Config.empty
-   *      .withGC(GC.default)
-   *      .withMode(Mode.default)
-   *      .withClang(clang)
-   *      .withClangPP(clangpp)
-   *      .withLinkingOptions(linkopts)
-   *      .withCompileOptions(compopts)
-   *      .withTargetTriple(triple)
-   *      .withNativelib(nativelib)
+   *      .withCompilerConfig{
+   *        NativeConfig.empty
+   *         .withGC(GC.default)
+   *         .withMode(Mode.default)
+   *         .withClang(clang)
+   *         .withClangPP(clangpp)
+   *         .withLinkingOptions(linkopts)
+   *         .withCompileOptions(compopts)
+   *         .withLinkStubs(true)
+   *       }
    *      .withMainClass(main)
    *      .withClassPath(classpath)
-   *      .withLinkStubs(true)
    *      .withWorkdir(workdir)
    *
    *  Build.build(config, outpath)
@@ -49,41 +50,40 @@ object Build {
    *  @param outpath The path to the resulting native binary.
    *  @return `outpath`, the path to the resulting native binary.
    */
-  def build(config: Config, outpath: Path): Path = {
-    val driver       = optimizer.Driver.default(config.mode)
-    val linkerResult = ScalaNative.link(config, driver)
+  def build(config: Config, outpath: Path)(implicit scope: Scope): Path =
+    config.logger.time("Total") {
+      val fclasspath = NativeLib.filterClasspath(config.classPath)
+      val fconfig    = config.withClassPath(fclasspath)
+      val workdir    = fconfig.workdir
 
-    if (linkerResult.unresolved.nonEmpty) {
-      linkerResult.unresolved.map(_.show).sorted.foreach { signature =>
-        config.logger.error(s"cannot link: $signature")
+      // create optimized code and generate ll
+      val entries = ScalaNative.entries(fconfig)
+      val linked  = ScalaNative.link(fconfig, entries)
+      ScalaNative.logLinked(fconfig, linked)
+      val optimized = ScalaNative.optimize(fconfig, linked)
+      val generated = ScalaNative.codegen(fconfig, optimized)
+
+      val objectPaths = config.logger.time("Compiling to native code") {
+        // find native libs
+        val nativelibs = NativeLib.findNativeLibs(fconfig.classPath, workdir)
+
+        // compile all libs
+        val libObjectPaths = nativelibs
+          .map { NativeLib.unpackNativeCode }
+          .map { destPath =>
+            val paths = NativeLib.findNativePaths(workdir, destPath)
+            val (projPaths, projConfig) =
+              Filter.filterNativelib(fconfig, linked, destPath, paths)
+            LLVM.compile(projConfig, projPaths)
+          }
+          .flatten
+
+        // compile generated ll
+        val llObjectPaths = LLVM.compile(fconfig, generated)
+
+        libObjectPaths ++ llObjectPaths
       }
-      throw new BuildException("unable to link")
-    }
-    val classCount = linkerResult.defns.count {
-      case _: nir.Defn.Class | _: nir.Defn.Module | _: nir.Defn.Trait => true
-      case _                                                          => false
-    }
-    val methodCount = linkerResult.defns.count(_.isInstanceOf[nir.Defn.Define])
-    config.logger.info(
-      s"Discovered ${classCount} classes and ${methodCount} methods")
 
-    val optimized =
-      ScalaNative.optimize(config,
-                           driver,
-                           linkerResult.defns,
-                           linkerResult.dyns)
-    val generated = {
-      ScalaNative.codegen(config, optimized)
-      IO.getAll(config.workdir, "glob:**.ll")
+      LLVM.link(config, linked, objectPaths, outpath)
     }
-    val objectFiles = LLVM.compile(config, generated)
-    val unpackedLib = LLVM.unpackNativelib(config.nativelib, config.workdir)
-
-    val nativelibConfig =
-      config.withCompileOptions("-O2" +: config.compileOptions)
-    val _ =
-      LLVM.compileNativelib(nativelibConfig, linkerResult, unpackedLib)
-
-    LLVM.link(config, linkerResult, objectFiles, unpackedLib, outpath)
-  }
 }

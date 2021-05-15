@@ -2,11 +2,14 @@ package java.lang
 
 import java.io._
 import java.util.{Collections, HashMap, Map, Properties}
-import scala.scalanative.native._
+import scala.scalanative.unsafe._
+import scala.scalanative.unsigned._
 import scala.scalanative.posix.unistd
-import scala.scalanative.runtime.time
-import scala.scalanative.runtime.Platform
-import scala.scalanative.runtime.GC
+import scala.scalanative.posix.sys.utsname._
+import scala.scalanative.posix.sys.uname._
+import scala.scalanative.posix.pwd
+import scala.scalanative.posix.pwdOps._
+import scala.scalanative.runtime.{time, Platform, GC, Intrinsics}
 
 final class System private ()
 
@@ -15,16 +18,15 @@ object System {
                 srcPos: scala.Int,
                 dest: Object,
                 destPos: scala.Int,
-                length: scala.Int): Unit = {
+                length: scala.Int): Unit =
     scalanative.runtime.Array.copy(src, srcPos, dest, destPos, length)
-  }
 
-  def exit(status: Int): Unit = {
+  def exit(status: Int): Unit =
     Runtime.getRuntime().exit(status)
-  }
 
   def identityHashCode(x: Object): scala.Int =
-    x.cast[Word].hashCode
+    java.lang.Long
+      .hashCode(Intrinsics.castRawPtrToLong(Intrinsics.castObjectToRawPtr(x)))
 
   private def loadProperties() = {
     val sysProps = new Properties()
@@ -40,7 +42,7 @@ object System {
                          "Java Platform API Specification")
     sysProps.setProperty("line.separator", lineSeparator())
 
-    if (Platform.isWindows) {
+    if (Platform.isWindows()) {
       sysProps.setProperty("file.separator", "\\")
       sysProps.setProperty("path.separator", ";")
       val userLang    = fromCString(Platform.windowsGetUserLang())
@@ -62,21 +64,41 @@ object System {
         sysProps.setProperty("user.language", userLang)
         sysProps.setProperty("user.country", userCountry)
       }
-      sysProps.setProperty("user.home", getenv("HOME"))
-      val buf = stackalloc[scala.Byte](1024)
-      unistd.getcwd(buf, 1024) match {
-        case null =>
-        case b    => sysProps.setProperty("user.dir", fromCString(b))
+      locally {
+        val buf = stackalloc[pwd.passwd]
+        val uid = unistd.getuid()
+        val res = pwd.getpwuid(uid, buf)
+        if (res == 0 && buf.pw_dir != null) {
+          sysProps.setProperty("user.home", fromCString(buf.pw_dir))
+        }
+      }
+      locally {
+        val bufSize = 1024.toUInt
+        val buf     = stackalloc[scala.Byte](bufSize)
+        val cwd     = unistd.getcwd(buf, bufSize)
+        if (cwd != null) {
+          sysProps.setProperty("user.dir", fromCString(cwd))
+        }
       }
     }
 
     sysProps
   }
 
-  private var systemProperties = loadProperties()
+  var in: InputStream =
+    new FileInputStream(FileDescriptor.in)
+  var out: PrintStream =
+    new PrintStream(new FileOutputStream(FileDescriptor.out))
+  var err: PrintStream =
+    new PrintStream(new FileOutputStream(FileDescriptor.err))
+
+  private val systemProperties = loadProperties()
+  Platform.setOSProps { (key: CString, value: CString) =>
+    val _ = systemProperties.setProperty(fromCString(key), fromCString(value))
+  }
 
   def lineSeparator(): String = {
-    if (Platform.isWindows) "\r\n"
+    if (Platform.isWindows()) "\r\n"
     else "\n"
   }
 
@@ -99,13 +121,6 @@ object System {
 
   def getenv(): Map[String, String] = envVars
   def getenv(key: String): String   = envVars.get(key)
-
-  var in: InputStream =
-    new FileInputStream(FileDescriptor.in)
-  var out: PrintStream =
-    new PrintStream(new FileOutputStream(FileDescriptor.out))
-  var err: PrintStream =
-    new PrintStream(new FileOutputStream(FileDescriptor.err))
 
   def setIn(in: InputStream): Unit =
     this.in = in

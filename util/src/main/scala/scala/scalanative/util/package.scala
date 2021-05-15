@@ -1,7 +1,5 @@
 package scala.scalanative
 
-import java.nio.ByteBuffer
-
 package object util {
 
   /** Marker methods, called whenever a specific control-flow branch
@@ -44,4 +42,14 @@ package object util {
     println(s"$msg (${(end - start).toFloat / 1000000} ms)")
     res
   }
+
+  def procs: Int =
+    java.lang.Runtime.getRuntime.availableProcessors
+
+  def partitionBy[T](elems: Seq[T])(f: T => Any): Map[Int, Seq[T]] =
+    partitionBy(elems, procs * procs)(f)
+
+  def partitionBy[T](elems: Seq[T], batches: Int)(
+      f: T => Any): Map[Int, Seq[T]] =
+    elems.groupBy { elem => Math.abs(f(elem).##) % batches }
 }

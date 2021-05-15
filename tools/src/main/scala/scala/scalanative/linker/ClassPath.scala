@@ -1,11 +1,12 @@
 package scala.scalanative
 package linker
 
-import nir.{Global, Dep, Attr, Defn}
-import nir.serialization.BinaryDeserializer
-import java.nio.file.{FileSystems, Path}
-import scalanative.io.VirtualDirectory
-import scalanative.util.Scope
+import java.nio.file.Path
+
+import scala.collection.mutable
+import scala.scalanative.io.VirtualDirectory
+import scala.scalanative.nir.serialization.deserializeBinary
+import scala.scalanative.nir.{Defn, Global, Prelude => NirPrelude}
 
 sealed trait ClassPath {
 
@@ -13,11 +14,9 @@ sealed trait ClassPath {
   private[scalanative] def contains(name: Global): Boolean
 
   /** Load given global and info about its dependencies. */
-  private[scalanative] def load(
-      name: Global): Option[(Seq[Dep], Seq[Attr.Link], Seq[String], Defn)]
+  private[scalanative] def load(name: Global): Option[Seq[Defn]]
 
-  /** Load all globals */
-  private[scalanative] def globals: Set[Global]
+  private[scalanative] def classesWithEntryPoints: Iterable[Global.Top]
 }
 
 object ClassPath {
@@ -31,27 +30,43 @@ object ClassPath {
     new Impl(directory)
 
   private final class Impl(directory: VirtualDirectory) extends ClassPath {
-    private val entries: Map[Global, BinaryDeserializer] = {
+    private val files =
       directory.files
         .filter(_.toString.endsWith(".nir"))
         .map { file =>
-          val name = Global.stripImplClassTrailingDollar(
-            Global.Top(io.packageNameFromPath(file)))
+          val name = Global.Top(io.packageNameFromPath(file))
 
-          (name -> new BinaryDeserializer(directory.read(file)))
+          name -> file
         }
         .toMap
-    }
+
+    private val cache =
+      mutable.Map.empty[Global, Option[Seq[Defn]]]
 
     def contains(name: Global) =
-      entries.contains(name.top)
+      files.contains(name.top)
 
-    def load(
-        name: Global): Option[(Seq[Dep], Seq[Attr.Link], Seq[String], Defn)] =
-      entries.get(name.top).flatMap { deserializer =>
-        deserializer.deserialize(name)
-      }
+    private def makeBufferName(directory: VirtualDirectory, file: Path) =
+      directory.uri
+        .resolve(new java.net.URI(file.getFileName().toString))
+        .toString
 
-    def globals: Set[Global] = entries.values.flatMap(_.globals).toSet
+    def load(name: Global): Option[Seq[Defn]] =
+      cache.getOrElseUpdate(name, {
+        files.get(name.top).map { file =>
+          deserializeBinary(directory.read(file),
+                            makeBufferName(directory, file))
+        }
+      })
+
+    lazy val classesWithEntryPoints: Iterable[Global.Top] = {
+      files.filter {
+        case (_, file) =>
+          val buffer = directory.read(file, len = NirPrelude.length)
+          NirPrelude
+            .readFrom(buffer, makeBufferName(directory, file))
+            .hasEntryPoints
+      }.keySet
+    }
   }
 }

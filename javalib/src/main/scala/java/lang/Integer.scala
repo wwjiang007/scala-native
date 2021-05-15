@@ -1,6 +1,7 @@
 package java.lang
 
-import scalanative.runtime.{divUInt, remUInt, intToULong, Intrinsics}
+import scalanative.runtime.Intrinsics.{divUInt, remUInt, intToULong}
+import scalanative.runtime.LLVMIntrinsics
 
 final class Integer(val _value: scala.Int)
     extends Number
@@ -76,14 +77,14 @@ final class Integer(val _value: scala.Int)
   protected def unary_+ : scala.Int = _value
   protected def unary_- : scala.Int = -_value
 
-  protected def +(x: String): String = _value + x
+  protected def +(x: String): String = "" + _value + x
 
   protected def <<(x: scala.Int): scala.Int   = _value << x
-  protected def <<(x: scala.Long): scala.Int  = _value << x
+  protected def <<(x: scala.Long): scala.Int  = _value << x.toInt
   protected def >>>(x: scala.Int): scala.Int  = _value >>> x
-  protected def >>>(x: scala.Long): scala.Int = _value >>> x
+  protected def >>>(x: scala.Long): scala.Int = _value >>> x.toInt
   protected def >>(x: scala.Int): scala.Int   = _value >> x
-  protected def >>(x: scala.Long): scala.Int  = _value >> x
+  protected def >>(x: scala.Long): scala.Int  = _value >> x.toInt
 
   protected def <(x: scala.Byte): scala.Boolean   = _value < x
   protected def <(x: scala.Short): scala.Boolean  = _value < x
@@ -176,18 +177,26 @@ final class Integer(val _value: scala.Int)
   protected def %(x: scala.Double): scala.Double = _value % x
 }
 
+private[lang] object IntegerDecimalScale {
+  private[lang] val decimalScale: Array[scala.Int] = Array(1000000000,
+    100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1)
+}
+
+private[lang] object IntegerCache {
+  private[lang] val cache = new Array[java.lang.Integer](256)
+}
+
 object Integer {
-  final val TYPE      = classOf[scala.Int]
+  import IntegerDecimalScale.decimalScale
+
+  final val TYPE      = scala.Predef.classOf[scala.scalanative.runtime.PrimitiveInt]
   final val MIN_VALUE = -2147483648
   final val MAX_VALUE = 2147483647
   final val SIZE      = 32
   final val BYTES     = 4
 
-  private final val decimalScale: Array[scala.Int] = Array(1000000000,
-    100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1)
-
   @inline def bitCount(i: scala.Int): scala.Int =
-    Intrinsics.`llvm.ctpop.i32`(i)
+    LLVMIntrinsics.`llvm.ctpop.i32`(i)
 
   @inline def byteValue(i: scala.Int): scala.Byte =
     i.toByte
@@ -198,15 +207,22 @@ object Integer {
   @inline def compareUnsigned(x: scala.Int, y: scala.Int): scala.Int =
     compare(x ^ scala.Int.MinValue, y ^ scala.Int.MinValue)
 
+  private def fail(s: String): Nothing =
+    throw new NumberFormatException(s"""For input string: "$s"""")
+
   def decode(nm: String): Integer = {
+    if (nm == null)
+      throw new NumberFormatException("null")
     val length = nm.length()
-    if (length == 0) throw new NumberFormatException()
+    if (length == 0) fail(nm)
 
     var i        = 0
     var first    = nm.charAt(i)
     val negative = first == '-'
-    if (negative) {
-      if (length == 1) throw new NumberFormatException(nm)
+    val positive = first == '+'
+
+    if (negative || positive) {
+      if (length == 1) fail(nm)
       i += 1
       first = nm.charAt(i)
     }
@@ -218,14 +234,14 @@ object Integer {
       first = nm.charAt(i)
       if (first == 'x' || first == 'X') {
         i += 1
-        if (i == length) throw new NumberFormatException(nm)
+        if (i == length) fail(nm)
         base = 16
       } else {
         base = 8
       }
     } else if (first == '#') {
       i += 1
-      if (i == length) throw new NumberFormatException(nm)
+      if (i == length) fail(nm)
       base = 16
     }
 
@@ -278,31 +294,31 @@ object Integer {
     Math.min(a, b)
 
   @inline def numberOfLeadingZeros(i: scala.Int): scala.Int =
-    Intrinsics.`llvm.ctlz.i32`(i, iszeroundef = false)
+    LLVMIntrinsics.`llvm.ctlz.i32`(i, iszeroundef = false)
 
   @inline def numberOfTrailingZeros(i: scala.Int): scala.Int =
-    Intrinsics.`llvm.cttz.i32`(i, iszeroundef = false)
+    LLVMIntrinsics.`llvm.cttz.i32`(i, iszeroundef = false)
 
   @inline def parseInt(s: String): scala.Int =
     parseInt(s, 10)
 
   def parseInt(s: String, radix: scala.Int): scala.Int = {
-    if (s == null || radix < Character.MIN_RADIX ||
-        radix > Character.MAX_RADIX) {
-      throw new NumberFormatException()
-    }
+    if (s == null)
+      throw new NumberFormatException("null")
+    if (radix < Character.MIN_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix less than Character.MIN_RADIX")
+    if (radix > Character.MAX_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix greater than Character.MAX_RADIX")
 
     val length = s.length()
-    if (length == 0) {
-      throw new NumberFormatException(s)
-    }
+    if (length == 0) fail(s)
 
     val positive = s.charAt(0) == '+'
     val negative = s.charAt(0) == '-'
     val offset   = if (positive || negative) 1 else 0
-    if (offset > 0 && length == 1) {
-      throw new NumberFormatException(s)
-    }
+    if (offset > 0 && length == 1) fail(s)
 
     parse(s, offset, radix, negative)
   }
@@ -319,17 +335,17 @@ object Integer {
     while (offset < length) {
       val digit = Character.digit(s.charAt(offset), radix)
       offset += 1
-      if (digit == -1) throw new NumberFormatException(s)
-      if (max > result) throw new NumberFormatException(s)
+      if (digit == -1) fail(s)
+      if (max > result) fail(s)
 
       val next = result * radix - digit
-      if (next > result) throw new NumberFormatException(s)
+      if (next > result) fail(s)
       result = next
     }
 
     if (!negative) {
       result = -result
-      if (result < 0) throw new NumberFormatException(s)
+      if (result < 0) fail(s)
     }
 
     result
@@ -340,10 +356,10 @@ object Integer {
     remUInt(dividend, divisor)
 
   @inline def reverse(i: scala.Int): scala.Int =
-    Intrinsics.`llvm.bitreverse.i32`(i)
+    LLVMIntrinsics.`llvm.bitreverse.i32`(i)
 
   @inline def reverseBytes(i: scala.Int): scala.Int =
-    Intrinsics.`llvm.bswap.i32`(i)
+    LLVMIntrinsics.`llvm.bswap.i32`(i)
 
   @inline def rotateLeft(i: scala.Int, distance: scala.Int): scala.Int =
     (i << distance) | (i >>> -distance)
@@ -591,16 +607,24 @@ object Integer {
   @inline def parseUnsignedInt(s: String): scala.Int = parseUnsignedInt(s, 10)
 
   def parseUnsignedInt(s: String, radix: scala.Int): scala.Int = {
-    if (s == null || radix < Character.MIN_RADIX ||
-        radix > Character.MAX_RADIX) throw new NumberFormatException(s)
+    if (s == null)
+      throw new NumberFormatException("null")
+    if (radix < Character.MIN_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix less than Character.MIN_RADIX")
+    if (radix > Character.MAX_RADIX)
+      throw new NumberFormatException(
+        s"radix $radix greater than Character.MAX_RADIX")
 
     val len = s.length()
+    if (len == 0) fail(s)
 
-    if (len == 0) throw new NumberFormatException(s)
-
-    val hasPlusSign = s.charAt(0) == '+'
-
-    if (hasPlusSign && len == 1) throw new NumberFormatException(s)
+    val hasPlusSign  = s.charAt(0) == '+'
+    val hasMinusSign = s.charAt(0) == '-'
+    if ((hasPlusSign || hasMinusSign) && len == 1) fail(s)
+    if (hasMinusSign)
+      throw new NumberFormatException(
+        s"""Illegal leading minus sign on unsigned string $s.""")
 
     val offset = if (hasPlusSign) 1 else 0
 
@@ -618,14 +642,15 @@ object Integer {
       val digit = Character.digit(s.charAt(offset), radix)
       offset += 1
 
-      if (digit == -1) throw new NumberFormatException(s)
+      if (digit == -1) fail(s)
 
-      if (compareUnsigned(result, max) > 0) throw new NumberFormatException(s)
+      if (compareUnsigned(result, max) > 0) fail(s)
 
       result = result * radix + digit
 
       if (compareUnsigned(digit, result) > 0)
-        throw new NumberFormatException(s)
+        throw new NumberFormatException(
+          s"""String value $s exceeds range of unsigned int.""")
     }
 
     result
@@ -667,8 +692,4 @@ object Integer {
       new String(buffer)
     }
   }
-}
-
-private[lang] object IntegerCache {
-  private[lang] val cache = new Array[java.lang.Integer](256)
 }

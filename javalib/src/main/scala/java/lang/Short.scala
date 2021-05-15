@@ -1,6 +1,7 @@
 package java.lang
 
-import scalanative.runtime.{shortToUInt, shortToULong, Intrinsics}
+import scalanative.runtime.Intrinsics.{shortToUInt, shortToULong}
+import scalanative.runtime.LLVMIntrinsics
 
 final class Short(val _value: scala.Short)
     extends Number
@@ -74,14 +75,14 @@ final class Short(val _value: scala.Short)
   protected def unary_+ : scala.Int = _value.toInt
   protected def unary_- : scala.Int = -_value.toInt
 
-  protected def +(x: String): String = _value + x
+  protected def +(x: String): String = "" + _value + x
 
   protected def <<(x: scala.Int): scala.Int   = _value << x
-  protected def <<(x: scala.Long): scala.Int  = _value << x
+  protected def <<(x: scala.Long): scala.Int  = _value << x.toInt
   protected def >>>(x: scala.Int): scala.Int  = _value >>> x
-  protected def >>>(x: scala.Long): scala.Int = _value >>> x
+  protected def >>>(x: scala.Long): scala.Int = _value >>> x.toInt
   protected def >>(x: scala.Int): scala.Int   = _value >> x
-  protected def >>(x: scala.Long): scala.Int  = _value >> x
+  protected def >>(x: scala.Long): scala.Int  = _value >> x.toInt
 
   protected def <(x: scala.Byte): scala.Boolean   = _value < x
   protected def <(x: scala.Short): scala.Boolean  = _value < x
@@ -175,7 +176,8 @@ final class Short(val _value: scala.Short)
 }
 
 object Short {
-  final val TYPE  = classOf[scala.Short]
+  final val TYPE =
+    scala.Predef.classOf[scala.scalanative.runtime.PrimitiveShort]
   final val SIZE  = 16
   final val BYTES = 2
 
@@ -194,12 +196,13 @@ object Short {
     x - y
 
   @inline def decode(nm: String): Short = {
-    val i = Integer.decode(nm).intValue
+    val i = Integer.decode(nm).intValue()
     val r = i.toShort
     if (r == i)
       valueOf(r)
     else
-      throw new NumberFormatException()
+      throw new NumberFormatException(
+        s"""Value $nm out of range from input $nm""")
   }
 
   @inline def hashCode(value: scala.Short): scala.Int =
@@ -211,13 +214,14 @@ object Short {
   @inline def parseShort(s: String, radix: scala.Int): scala.Short = {
     val i = Integer.parseInt(s, radix)
     if (i < MIN_VALUE || i > MAX_VALUE)
-      throw new NumberFormatException(s"""For input string: "$s"""")
+      throw new NumberFormatException(
+        s"""Value out of range. Value:"$s" Radix:$radix""")
     else
       i.toShort
   }
 
   @inline def reverseBytes(i: scala.Short): scala.Short =
-    Intrinsics.`llvm.bswap.i16`(i)
+    LLVMIntrinsics.`llvm.bswap.i16`(i)
 
   @inline def toString(s: scala.Short): String =
     Integer.toString(s)

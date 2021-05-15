@@ -1,6 +1,12 @@
 package java.lang
 
-import scalanative.native._
+import scalanative.unsafe._
+import scalanative.libc
+
+import scalanative.runtime.ieee754tostring.ryu.{RyuRoundingMode, RyuDouble}
+import scalanative.runtime.Intrinsics
+
+import java.lang.IEEE754Helpers.parseIEEE754
 
 final class Double(val _value: scala.Double)
     extends Number
@@ -101,7 +107,7 @@ final class Double(val _value: scala.Double)
   protected def unary_+ : scala.Double = _value
   protected def unary_- : scala.Double = -_value
 
-  protected def +(x: String): String = _value + x
+  protected def +(x: String): String = "" + _value + x
 
   protected def <(x: scala.Byte): scala.Boolean   = _value < x
   protected def <(x: scala.Short): scala.Boolean  = _value < x
@@ -187,7 +193,8 @@ object Double {
   final val NEGATIVE_INFINITY = 1.0 / -0.0
   final val POSITIVE_INFINITY = 1.0 / 0.0
   final val SIZE              = 64
-  final val TYPE              = classOf[scala.Double]
+  final val TYPE =
+    scala.Predef.classOf[scala.scalanative.runtime.PrimitiveDouble]
 
   @inline def compare(x: scala.Double, y: scala.Double): scala.Int =
     if (x > y) 1
@@ -211,15 +218,16 @@ object Double {
     else doubleToRawLongBits(value)
 
   @inline def doubleToRawLongBits(value: scala.Double): scala.Long =
-    value.cast[scala.Long]
+    Intrinsics.castDoubleToLong(value)
 
   @inline def hashCode(value: scala.Double): scala.Int = {
     val v = doubleToLongBits(value)
     (v ^ (v >>> 32)).toInt
   }
 
+  // Ported from Scala.js commit: 217f3a3 dated: 2021-02-19
   @inline def isFinite(d: scala.Double): scala.Boolean =
-    !isInfinite(d)
+    !isNaN(d) && !isInfinite(d)
 
   @inline def isInfinite(v: scala.Double): scala.Boolean =
     v == POSITIVE_INFINITY || v == NEGATIVE_INFINITY
@@ -228,7 +236,7 @@ object Double {
     v != v
 
   @inline def longBitsToDouble(value: scala.Long): scala.Double =
-    value.cast[scala.Double]
+    Intrinsics.castLongToDouble(value)
 
   @inline def max(a: scala.Double, b: scala.Double): scala.Double =
     Math.max(a, b)
@@ -237,16 +245,7 @@ object Double {
     Math.min(a, b)
 
   def parseDouble(s: String): scala.Double =
-    Zone { implicit z =>
-      val cstr = toCString(s)
-      val end  = stackalloc[CString]
-
-      errno.errno = 0
-      val res = stdlib.strtod(cstr, end)
-
-      if (errno.errno == 0 && cstr != !end && string.strlen(!end) == 0) res
-      else throw new NumberFormatException(s)
-    }
+    parseIEEE754[scala.Double](s, libc.stdlib.strtod)
 
   @inline def sum(a: scala.Double, b: scala.Double): scala.Double =
     a + b
@@ -285,11 +284,8 @@ object Double {
 
           val hexSignificand = java.lang.Long.toHexString(significand)
           if (significand != 0 && fractionDigits > hexSignificand.length) {
-            var digitDiff = fractionDigits - hexSignificand.length - 1
-            while (digitDiff != 0) {
-              hexString.append('0')
-              digitDiff -= 1
-            }
+            val digitDiff = fractionDigits - hexSignificand.length
+            hexString.append("0" * digitDiff)
           }
 
           hexString.append(hexSignificand)
@@ -304,11 +300,8 @@ object Double {
 
           val hexSignificand = java.lang.Long.toHexString(significand)
           if (significand != 0 && fractionDigits > hexSignificand.length) {
-            var digitDiff = fractionDigits - hexSignificand.length - 1
-            while (digitDiff != 0) {
-              hexString.append('0')
-              digitDiff -= 1
-            }
+            var digitDiff = fractionDigits - hexSignificand.length
+            hexString.append("0" * digitDiff)
           }
 
           hexString.append(hexSignificand)
@@ -322,17 +315,7 @@ object Double {
   }
 
   @inline def toString(d: scala.Double): String = {
-    if (isNaN(d)) {
-      "NaN"
-    } else if (d == POSITIVE_INFINITY) {
-      "Infinity"
-    } else if (d == NEGATIVE_INFINITY) {
-      "-Infinity"
-    } else {
-      val cstr = stackalloc[CChar](32)
-      stdio.snprintf(cstr, 32, c"%f", d)
-      fromCString(cstr)
-    }
+    RyuDouble.doubleToString(d, RyuRoundingMode.Conservative)
   }
 
   @inline def valueOf(d: scala.Double): Double =

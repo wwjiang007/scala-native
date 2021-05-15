@@ -10,41 +10,62 @@ package scala.scalanative.build
  *
  *  * Immix GC. Mostly-precise mark-region garbage collector.
  *
+ *  * Commix GC. Mostly-precise mark-region garbage collector running concurrently.
+ *
  *  Additional GCs might be added to the list in the future.
  *
  *  @param dir name of the gc
  *  @param links linking dependencies of the gc
  */
-sealed abstract class GC private (val name: String, val links: Seq[String]) {
+sealed abstract class GC private (val name: String,
+                                  val links: Seq[String],
+                                  val include: Seq[String]) {
   override def toString: String = name
 }
 object GC {
-  private[scalanative] final case object None  extends GC("none", Seq())
-  private[scalanative] final case object Boehm extends GC("boehm", Seq("gc"))
-  private[scalanative] final case object Immix extends GC("immix", Seq())
+  private[scalanative] final case object None
+      extends GC("none", Seq(), Seq("shared"))
+  private[scalanative] final case object Boehm
+      extends GC("boehm", Seq("gc"), Seq())
+  private[scalanative] final case object Immix
+      extends GC("immix", Seq(), Seq("shared", "immix_commix"))
+  private[scalanative] final case object Commix
+      extends GC("commix", Seq(), Seq("shared", "immix_commix"))
+  private[scalanative] final case object Experimental
+      extends GC("experimental", Seq(), Seq())
 
   /** Non-freeing garbage collector.*/
   def none: GC = None
 
-  /** Conservative grbage collector based on libgc. */
+  /** Conservative garbage collector based on libgc. */
   def boehm: GC = Boehm
 
   /** Mostly-precise mark-region garbage collector. */
   def immix: GC = Immix
 
+  /** Mostly-precise mark-region garbage collector running concurrently. */
+  def commix: GC = Commix
+
   /** The default garbage collector. */
-  def default: GC = Boehm
+  def default: GC = Immix
+
+  /** Placeholder for a user defined experimental garbage collector. */
+  def experimental: GC = Experimental
 
   /** Get a garbage collector with given name. */
   def apply(gc: String) = gc match {
     case "none" =>
-      GC.None
+      none
     case "boehm" =>
-      GC.Boehm
+      boehm
     case "immix" =>
-      GC.Immix
+      immix
+    case "commix" =>
+      commix
+    case "experimental" =>
+      experimental
     case value =>
       throw new IllegalArgumentException(
-        "nativeGC can be either \"none\", \"boehm\" or \"immix\", not: " + value)
+        "nativeGC can be either \"none\", \"boehm\", \"immix\", \"commix\" or \"experimental\", not: " + value)
   }
 }

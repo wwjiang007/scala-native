@@ -3,8 +3,9 @@ package scala.scalanative
 import nir.Global
 
 import org.scalatest._
+import org.scalatest.matchers.should.Matchers
 
-class FrameworkTest extends CodeGenSpec with Matchers {
+class FrameworkTest extends codegen.CodeGenSpec with Matchers {
 
   "The test framework" should "return the definitions for a single class" in {
     link("A$",

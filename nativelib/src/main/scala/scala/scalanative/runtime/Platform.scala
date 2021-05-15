@@ -1,10 +1,16 @@
 package scala.scalanative
 package runtime
 
-import scala.scalanative.native.{CString, extern, name}
+import scala.scalanative.unsafe.{CInt, CString, CFuncPtr2, Ptr, extern, name}
 
 @extern
 object Platform {
+  @name("scalanative_platform_is_linux")
+  def isLinux(): Boolean = extern
+
+  @name("scalanative_platform_is_mac")
+  def isMac(): Boolean = extern
+
   @name("scalanative_platform_is_windows")
   def isWindows(): Boolean = extern
 
@@ -16,4 +22,8 @@ object Platform {
 
   @name("scalanative_little_endian")
   def littleEndian(): Boolean = extern
+
+  @name("scalanative_set_os_props")
+  def setOSProps(addProp: CFuncPtr2[CString, CString, Unit]): Unit =
+    extern
 }

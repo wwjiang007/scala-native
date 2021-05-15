@@ -116,7 +116,7 @@ class Socket protected (private[net] val impl: SocketImpl,
     val addr =
       if (bindpoint == null ||
           bindpoint.asInstanceOf[InetSocketAddress].getAddress == null)
-        new InetSocketAddress(InetAddress.getLoopbackAddress, 0)
+        new InetSocketAddress(InetAddress.getLoopbackAddress(), 0)
       else {
         bindpoint.asInstanceOf[InetSocketAddress]
       }
@@ -187,8 +187,7 @@ class Socket protected (private[net] val impl: SocketImpl,
 
   def getSoLinger: Int = {
     checkClosedAndCreate()
-    val value = impl.getOption(SocketOptions.SO_LINGER).asInstanceOf[Int]
-    if (value == 0) -1 else value
+    impl.getOption(SocketOptions.SO_LINGER).asInstanceOf[Int]
   }
 
   def getSoTimeout: Int = {
@@ -246,6 +245,8 @@ class Socket protected (private[net] val impl: SocketImpl,
     }
 
     val value = if (on) {
+      // the maximum timeout value is platform specific,
+      // but most implementations limit it to USHORT_MAX
       if (linger > 65535) 65535 else linger
     } else {
       -1
@@ -270,18 +271,18 @@ class Socket protected (private[net] val impl: SocketImpl,
   }
 
   def shutdownInput(): Unit = {
-    impl.shutdownInput
+    impl.shutdownInput()
     inputShutdown = true
   }
 
   def shutdownOutput(): Unit = {
-    impl.shutdownOutput
+    impl.shutdownOutput()
     outputShutdown = true
   }
 
   override def close(): Unit = {
     closed = true
-    impl.close
+    impl.close()
   }
 
   // def setPerformancePreferences(connectionTime: Int, latency: Int, bandwith: Int): Unit

@@ -1,6 +1,8 @@
 package java.lang
 
-import scalanative.native.stub
+import scalanative.unsigned._
+import scalanative.annotation.stub
+import scalanative.libc.errno
 
 class Thread private (runnable: Runnable) extends Runnable {
   if (runnable ne Thread.MainRunnable) ???
@@ -22,8 +24,9 @@ class Thread private (runnable: Runnable) extends Runnable {
   final def getName(): String =
     this.name
 
-  @stub
-  def getStackTrace(): Array[StackTraceElement] = ???
+  // Stub implementation
+  def getStackTrace(): Array[StackTraceElement] =
+    new Array[StackTraceElement](0) // Do not use scala collections.
 
   def getId(): scala.Long = 1
 
@@ -41,6 +44,15 @@ class Thread private (runnable: Runnable) extends Runnable {
   def this(name: String) = this(??? : Runnable)
 
   @stub
+  def this() = this(??? : Runnable)
+
+  @stub
+  def join(): Unit = ???
+
+  @stub
+  def start(): Unit = ???
+
+  @stub
   def getContextClassLoader(): java.lang.ClassLoader = ???
 
   trait UncaughtExceptionHandler {
@@ -55,14 +67,14 @@ object Thread {
   def currentThread(): Thread = MainThread
 
   def interrupted(): scala.Boolean = {
-    val ret = currentThread.isInterrupted
-    currentThread.interruptedState = false
+    val ret = currentThread().isInterrupted()
+    currentThread().interruptedState = false
     ret
   }
 
   def sleep(millis: scala.Long, nanos: scala.Int): Unit = {
     import scala.scalanative.posix.errno.EINTR
-    import scala.scalanative.native._
+    import scala.scalanative.unsafe._
     import scala.scalanative.posix.unistd
 
     def checkErrno() =

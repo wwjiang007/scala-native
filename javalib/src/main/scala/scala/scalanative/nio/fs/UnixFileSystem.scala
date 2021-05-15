@@ -12,17 +12,21 @@ import java.nio.file.{
 }
 import java.nio.file.spi.FileSystemProvider
 import java.nio.file.attribute.UserPrincipalLookupService
-import java.util.{LinkedList, Set}
+import java.nio.file.attribute.PosixUserPrincipalLookupService
+import java.{util => ju}
 
-import scala.scalanative.native.{
+import scala.scalanative.unsafe.{
   CUnsignedLong,
   Ptr,
   sizeof,
-  statvfs,
   toCString,
   Zone,
   alloc
 }
+
+import scala.scalanative.posix.sys.statvfs
+
+import scalanative.annotation.stub
 
 class UnixFileSystem(override val provider: FileSystemProvider,
                      val root: String,
@@ -33,8 +37,11 @@ class UnixFileSystem(override val provider: FileSystemProvider,
   override def close(): Unit =
     closed = true
 
-  override def getFileStores(): Iterable[FileStore] =
-    ???
+  @stub
+  override def getFileStores(): Iterable[FileStore] = ???
+
+  override def getUserPrincipalLookupService(): UserPrincipalLookupService =
+    PosixUserPrincipalLookupService
 
   override def getPath(first: String, more: Array[String]): Path =
     new UnixPath(this, (first +: more).mkString("/"))
@@ -43,7 +50,7 @@ class UnixFileSystem(override val provider: FileSystemProvider,
     PathMatcherImpl(syntaxAndPattern)
 
   override def getRootDirectories(): Iterable[Path] = {
-    val list = new LinkedList[Path]()
+    val list = new ju.LinkedList[Path]()
     list.add(getPath(root, Array.empty))
     list
   }
@@ -60,16 +67,16 @@ class UnixFileSystem(override val provider: FileSystemProvider,
     if (err != 0) {
       throw new IOException()
     } else {
-      val flags = !(stat._10)
+      val flags = stat._10
       val mask  = statvfs.ST_RDONLY
       (flags & mask) == mask
     }
   }
 
-  override def newWatchService: WatchService =
+  override def newWatchService(): WatchService =
     throw new UnsupportedOperationException()
 
-  override def supportedFileAttributeViews(): Set[String] = {
+  override def supportedFileAttributeViews(): ju.Set[String] = {
     val set = new java.util.HashSet[String]()
     set.add("basic")
     set.add("posix")

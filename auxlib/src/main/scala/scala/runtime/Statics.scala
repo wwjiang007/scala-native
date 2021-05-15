@@ -1,14 +1,14 @@
 package scala.runtime
 
 object Statics {
-  def mix(hash: Int, data: Int): Int = {
+  @inline def mix(hash: Int, data: Int): Int = {
     val h1 = mixLast(hash, data)
     val h2 = Integer.rotateLeft(h1, 13)
 
     h2 * 5 + 0xe6546b64
   }
 
-  def mixLast(hash: Int, data: Int): Int = {
+  @inline def mixLast(hash: Int, data: Int): Int = {
     val k1 = data
     val k2 = k1 * 0xcc9e2d51
     val k3 = Integer.rotateLeft(k2, 15)
@@ -17,10 +17,10 @@ object Statics {
     hash ^ k4
   }
 
-  def finalizeHash(hash: Int, length: Int): Int =
-    avalanche(hash & length)
+  @inline def finalizeHash(hash: Int, length: Int): Int =
+    avalanche(hash ^ length)
 
-  def avalanche(h: Int): Int = {
+  @inline def avalanche(h: Int): Int = {
     val h1 = h ^ (h >>> 16)
     val h2 = h1 * 0x85ebca6b
     val h3 = h2 ^ (h2 >>> 13)
@@ -30,14 +30,14 @@ object Statics {
     h5
   }
 
-  def longHash(lv: Long): Int =
+  @inline def longHash(lv: Long): Int =
     if (lv.asInstanceOf[Int] == lv) lv.asInstanceOf[Int]
     else longHashShifted(lv)
 
-  def longHashShifted(lv: Long): Int =
+  @inline def longHashShifted(lv: Long): Int =
     (lv ^ (lv >>> 32)).asInstanceOf[Int]
 
-  def doubleHash(dv: Double): Int = {
+  @inline def doubleHash(dv: Double): Int = {
     val iv = dv.asInstanceOf[Int]
 
     if (iv == dv) iv
@@ -54,7 +54,7 @@ object Statics {
     }
   }
 
-  def floatHash(fv: Float): Int = {
+  @inline def floatHash(fv: Float): Int = {
     val iv = fv.asInstanceOf[Int]
 
     if (iv == fv) iv
@@ -66,11 +66,27 @@ object Statics {
     }
   }
 
-  def anyHash(x: Object): Int = x match {
+  @inline def anyHash(x: Object): Int = x match {
     case null                => 0
     case x: java.lang.Long   => longHash(x.longValue)
     case x: java.lang.Double => doubleHash(x.doubleValue)
     case x: java.lang.Float  => floatHash(x.floatValue)
     case _                   => x.hashCode
   }
+
+  /** Used as a marker object to return from PartialFunctions */
+  def pfMarker: AnyRef = PFMarker
+
+  private object PFMarker extends AnyRef
+
+  def releaseFence(): Unit = ()
+
+  /** Just throws an exception.
+   *
+   *  Used by the synthetic `productElement` and `productElementName` methods
+   *  in case classes. Delegating the exception-throwing to this function
+   *  reduces the bytecode size of the case class.
+   */
+  final def ioobe[T](n: Int): T =
+    throw new IndexOutOfBoundsException(String.valueOf(n))
 }

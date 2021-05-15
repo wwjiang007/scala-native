@@ -2,7 +2,9 @@ package java
 package lang
 
 import java.io._
-import scala.scalanative.native._, signal._
+import scala.scalanative.annotation.stub
+import scala.scalanative.unsafe._
+import scala.scalanative.libc._, signal._
 import scala.scalanative.posix.sys.ioctl._
 
 /*
@@ -18,7 +20,7 @@ private[lang] object PipeIO {
       childFd: Int,
       redirect: ProcessBuilder.Redirect
   )(implicit ioStream: PipeIO[T]): T = {
-    redirect.`type` match {
+    redirect.`type`() match {
       case ProcessBuilder.Redirect.Type.PIPE =>
         ioStream.fdStream(process, new FileDescriptor(childFd))
       case _ =>
@@ -59,7 +61,7 @@ private[lang] object PipeIO {
       var toRead                     = 0
       var readBuf: Array[scala.Byte] = Array()
       while ({
-        toRead = availableFD
+        toRead = availableFD()
         toRead > 0
       }) {
         val size = if (readBuf == null) 0 else readBuf.size
@@ -78,7 +80,7 @@ private[lang] object PipeIO {
     private[this] var drained = false
     private def availableFD() = {
       val res = stackalloc[CInt]
-      ioctl(is.getFD.fd, FIONREAD, res.cast[Ptr[scala.Byte]]) match {
+      ioctl(is.getFD().fd, FIONREAD, res.asInstanceOf[Ptr[scala.Byte]]) match {
         case -1 => 0
         case _  => !res
       }
@@ -92,6 +94,7 @@ private[lang] object PipeIO {
                (p, fd) => new BufferedOutputStream(new FileOutputStream(fd)))
 
   private final object NullInput extends Stream {
+    @stub
     override def process: UnixProcess                                = ???
     override def available(): Int                                    = 0
     override def close(): Unit                                       = {}

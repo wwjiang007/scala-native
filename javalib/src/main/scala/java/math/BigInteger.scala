@@ -240,7 +240,7 @@ class BigInteger extends Number with Comparable[BigInteger] {
     if ((radix < java.lang.Character.MIN_RADIX) ||
         (radix > java.lang.Character.MAX_RADIX))
       throw new NumberFormatException("Radix out of range")
-    if (s.isEmpty)
+    if (s.isEmpty())
       throw new NumberFormatException("Zero length BigInteger")
 
     this.setFromString(s, radix)
@@ -333,6 +333,13 @@ class BigInteger extends Number with Comparable[BigInteger] {
 
   def bitLength(): Int = BitLevel.bitLength(this)
 
+  def byteValueExact(): Byte = {
+    if ((numberLength > 1) || (bitLength() >= java.lang.Byte.SIZE)) {
+      throw new ArithmeticException("BigInteger out of byte range")
+    }
+    byteValue()
+  }
+
   def clearBit(n: Int): BigInteger = {
     if (testBit(n)) BitLevel.flipBit(this, n)
     else this
@@ -352,7 +359,7 @@ class BigInteger extends Number with Comparable[BigInteger] {
       throw new ArithmeticException("BigInteger divide by zero")
 
     val divisorSign = divisor.sign
-    if (divisor.isOne) {
+    if (divisor.isOne()) {
       if (divisor.sign > 0) this
       else this.negate()
     } else {
@@ -495,7 +502,7 @@ class BigInteger extends Number with Comparable[BigInteger] {
       -1
     } else {
       // (sign != 0) implies that exists some non zero digit
-      val i = getFirstNonzeroDigit
+      val i = getFirstNonzeroDigit()
       (i << 5) + java.lang.Integer.numberOfTrailingZeros(digits(i))
     }
   }
@@ -514,6 +521,13 @@ class BigInteger extends Number with Comparable[BigInteger] {
 
   override def intValue(): Int = sign * digits(0)
 
+  def intValueExact(): Int = {
+    if ((numberLength > 1) || (bitLength() >= java.lang.Integer.SIZE)) {
+      throw new ArithmeticException("BigInteger out of int range")
+    }
+    intValue()
+  }
+
   def isProbablePrime(certainty: Int): Boolean =
     Primality.isProbablePrime(abs(), certainty)
 
@@ -523,6 +537,13 @@ class BigInteger extends Number with Comparable[BigInteger] {
         (digits(1).toLong << 32) | (digits(0) & 0xFFFFFFFFL)
       else digits(0) & 0xFFFFFFFFL
     sign * value
+  }
+
+  def longValueExact(): Long = {
+    if ((numberLength > 2) || (bitLength() >= java.lang.Long.SIZE)) {
+      throw new ArithmeticException("BigInteger out of long range")
+    }
+    longValue()
   }
 
   def max(bi: BigInteger): BigInteger = {
@@ -550,7 +571,7 @@ class BigInteger extends Number with Comparable[BigInteger] {
     } else if (!(testBit(0) || m.testBit(0))) {
       // If both are even, no inverse exists
       throw new ArithmeticException("BigInteger not invertible.")
-    } else if (m.isOne) {
+    } else if (m.isOne()) {
       ZERO
     } else {
       // From now on: (m > 1)
@@ -569,7 +590,7 @@ class BigInteger extends Number with Comparable[BigInteger] {
       throw new ArithmeticException("BigInteger: modulus not positive")
 
     var base = this
-    if (m.isOne || (_exponent.sign > 0 && base.sign == 0)) {
+    if (m.isOne() || (_exponent.sign > 0 && base.sign == 0)) {
       BigInteger.ZERO
     } else if (base.sign == 0 && _exponent.sign == 0) {
       BigInteger.ONE
@@ -679,6 +700,13 @@ class BigInteger extends Number with Comparable[BigInteger] {
     else BitLevel.shiftLeft(this, -n)
   }
 
+  def shortValueExact(): Short = {
+    if ((numberLength > 1) || (bitLength() >= java.lang.Short.SIZE)) {
+      throw new ArithmeticException("BigInteger out of short range")
+    }
+    shortValue()
+  }
+
   def signum(): Int = sign
 
   def subtract(bi: BigInteger): BigInteger = Elementary.subtract(this, bi)
@@ -692,12 +720,12 @@ class BigInteger extends Number with Comparable[BigInteger] {
       throw new ArithmeticException("Negative bit address")
     } else if (intCount >= numberLength) {
       sign < 0
-    } else if (sign < 0 && intCount < getFirstNonzeroDigit) {
+    } else if (sign < 0 && intCount < getFirstNonzeroDigit()) {
       false
     } else {
       var digit = digits(intCount)
       if (sign < 0)
-        digit = if (getFirstNonzeroDigit == intCount) -digit else ~digit
+        digit = if (getFirstNonzeroDigit() == intCount) -digit else ~digit
       val i = 1 << (n & 31)
       (digit & i) != 0
     }
@@ -709,7 +737,7 @@ class BigInteger extends Number with Comparable[BigInteger] {
 
     val temp: BigInteger  = this
     val bitLen            = bitLength()
-    val firstNonZeroDigit = getFirstNonzeroDigit
+    val firstNonZeroDigit = getFirstNonzeroDigit()
     var bytesLen          = (bitLen >> 3) + 1
     /*
      * Puts the little-endian int array representing the magnitude of this

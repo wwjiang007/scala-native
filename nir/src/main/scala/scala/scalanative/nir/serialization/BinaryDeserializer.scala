@@ -2,63 +2,40 @@ package scala.scalanative
 package nir
 package serialization
 
+import java.net.URI
 import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import scala.collection.mutable
+import scala.scalanative.nir.serialization.{Tags => T}
 
-import nir.serialization.{Tags => T}
-import Global.Member
+final class BinaryDeserializer(buffer: ByteBuffer, bufferName: String) {
 
-final class BinaryDeserializer(_buffer: => ByteBuffer) {
-  private lazy val buffer = _buffer
   import buffer._
 
-  private lazy val header: Map[Global, Int] = {
+  private[this] var lastPosition: Position = Position.NoPosition
+
+  private val (prelude, header, files): (Prelude,
+                                         Seq[(Global, Int)],
+                                         Array[URI]) = {
     buffer.position(0)
 
-    val magic    = getInt
-    val compat   = getInt
-    val revision = getInt
+    val prelude = Prelude.readFrom(buffer, bufferName)
 
-    assert(magic == Versions.magic, "Can't read non-NIR file.")
-    assert(compat == Versions.compat && revision <= Versions.revision,
-           "Can't read binary-incompatible version of NIR.")
+    val files = Array.fill(getInt())(new URI(getUTF8String()))
 
-    val (_, _, _, pairs) = scoped(getSeq((getGlobal, getInt)))
-    val map              = pairs.toMap
-    this.deps = null
-    map
+    val pairs = getSeq((getGlobal(), getInt()))
+    (prelude, pairs, files)
   }
 
-  private var deps: mutable.Set[Dep]        = _
-  private var links: mutable.Set[Attr.Link] = _
-  private var dyns: mutable.Set[String]     = _
-
-  private def scoped[T](f: => T)
-    : (mutable.Set[Dep], mutable.Set[Attr.Link], mutable.Set[String], T) = {
-    this.deps = mutable.Set.empty[Dep]
-    this.links = mutable.Set.empty[Attr.Link]
-    this.dyns = mutable.Set.empty[String]
-    val res   = f
-    val deps  = this.deps
-    val links = this.links
-    val dyns  = this.dyns
-    this.deps = null
-    this.links = null
-    this.dyns = null
-    (deps, links, dyns, res)
-  }
-
-  final def globals: Set[Global] = header.keySet
-
-  final def deserialize(
-      g: Global): Option[(Seq[Dep], Seq[Attr.Link], Seq[String], Defn)] =
-    header.get(g).map {
-      case offset =>
+  final def deserialize(): Seq[Defn] = {
+    val allDefns = mutable.UnrolledBuffer.empty[Defn]
+    header.foreach {
+      case (g, offset) =>
         buffer.position(offset)
-        val (deps, links, dyns, defn) = scoped(getDefn)
-        deps -= Dep.Direct(g)
-        (deps.toSeq, links.toSeq, dyns.toSeq, defn)
+        allDefns += getDefn()
     }
+    allDefns.toSeq
+  }
 
   private def getSeq[T](getT: => T): Seq[T] =
     (1 to getInt).map(_ => getT).toSeq
@@ -68,42 +45,38 @@ final class BinaryDeserializer(_buffer: => ByteBuffer) {
 
   private def getInts(): Seq[Int] = getSeq(getInt)
 
-  private def getStrings(): Seq[String] = getSeq(getString)
-  private def getString(): String = {
+  private def getUTF8String(): String = {
+    new String(getBytes(), StandardCharsets.UTF_8)
+  }
+
+  private def getBytes(): Array[Byte] = {
     val arr = new Array[Byte](getInt)
     get(arr)
-    new String(arr, "UTF-8")
+    arr
   }
 
   private def getBool(): Boolean = get != 0
 
-  private def getAttrs(): Attrs = {
-    val buf = mutable.UnrolledBuffer.empty[Attr]
+  private def getAttrs(): Attrs = Attrs.fromSeq(getSeq(getAttr()))
+  private def getAttr(): Attr = getInt match {
+    case T.MayInlineAttr    => Attr.MayInline
+    case T.InlineHintAttr   => Attr.InlineHint
+    case T.NoInlineAttr     => Attr.NoInline
+    case T.AlwaysInlineAttr => Attr.AlwaysInline
 
-    (1 to getInt).foreach { _ =>
-      getInt match {
-        case T.MayInlineAttr    => buf += Attr.MayInline
-        case T.InlineHintAttr   => buf += Attr.InlineHint
-        case T.NoInlineAttr     => buf += Attr.NoInline
-        case T.AlwaysInlineAttr => buf += Attr.AlwaysInline
+    case T.MaySpecialize => Attr.MaySpecialize
+    case T.NoSpecialize  => Attr.NoSpecialize
 
-        case T.DynAttr  => buf += Attr.Dyn
-        case T.StubAttr => buf += Attr.Stub
+    case T.UnOptAttr   => Attr.UnOpt
+    case T.NoOptAttr   => Attr.NoOpt
+    case T.DidOptAttr  => Attr.DidOpt
+    case T.BailOptAttr => Attr.BailOpt(getUTF8String())
 
-        case T.PureAttr     => buf += Attr.Pure
-        case T.ExternAttr   => buf += Attr.Extern
-        case T.OverrideAttr => buf += Attr.Override(getGlobal)
-
-        case T.LinkAttr      => links += Attr.Link(getString)
-        case T.PinAlwaysAttr => deps += Dep.Direct(getGlobalNoDep)
-        case T.PinWeakAttr   => deps += Dep.Weak(getGlobalNoDep)
-        case T.PinIfAttr =>
-          deps += Dep.Conditional(getGlobalNoDep, getGlobalNoDep)
-      }
-      ()
-    }
-
-    Attrs.fromSeq(buf)
+    case T.DynAttr      => Attr.Dyn
+    case T.StubAttr     => Attr.Stub
+    case T.ExternAttr   => Attr.Extern
+    case T.LinkAttr     => Attr.Link(getUTF8String())
+    case T.AbstractAttr => Attr.Abstract
   }
 
   private def getBin(): Bin = getInt match {
@@ -127,17 +100,22 @@ final class BinaryDeserializer(_buffer: => ByteBuffer) {
     case T.XorBin  => Bin.Xor
   }
 
-  private def getInsts(): Seq[Inst] = getSeq(getInst)
-  private def getInst(): Inst = getInt match {
-    case T.NoneInst        => Inst.None
-    case T.LabelInst       => Inst.Label(getLocal, getParams)
-    case T.LetInst         => Inst.Let(getLocal, getOp)
-    case T.UnreachableInst => Inst.Unreachable
-    case T.RetInst         => Inst.Ret(getVal)
-    case T.JumpInst        => Inst.Jump(getNext)
-    case T.IfInst          => Inst.If(getVal, getNext, getNext)
-    case T.SwitchInst      => Inst.Switch(getVal, getNext, getNexts)
-    case T.ThrowInst       => Inst.Throw(getVal, getNext)
+  private def getInsts(): Seq[Inst] = getSeq(getInst())
+  private def getInst(): Inst = {
+    implicit val pos: nir.Position = getPosition()
+    getInt() match {
+      case T.LabelInst       => Inst.Label(getLocal(), getParams())
+      case T.LetInst         => Inst.Let(getLocal(), getOp(), Next.None)
+      case T.LetUnwindInst   => Inst.Let(getLocal(), getOp(), getNext())
+      case T.RetInst         => Inst.Ret(getVal())
+      case T.JumpInst        => Inst.Jump(getNext())
+      case T.IfInst          => Inst.If(getVal(), getNext(), getNext())
+      case T.SwitchInst      => Inst.Switch(getVal(), getNext(), getNexts())
+      case T.ThrowInst       => Inst.Throw(getVal(), getNext())
+      case T.UnreachableInst => Inst.Unreachable(getNext())
+      case T.LinktimeIfInst =>
+        Inst.LinktimeIf(getLinktimeCondition(), getNext(), getNext())
+    }
   }
 
   private def getComp(): Comp = getInt match {
@@ -175,155 +153,206 @@ final class BinaryDeserializer(_buffer: => ByteBuffer) {
     case T.BitcastConv  => Conv.Bitcast
   }
 
-  private def getDefns(): Seq[Defn] = getSeq(getDefn)
-  private def getDefn(): Defn = getInt match {
-    case T.VarDefn =>
-      Defn.Var(getAttrs, getGlobal, getType, getVal)
+  private def getDefns(): Seq[Defn] = getSeq(getDefn())
+  private def getDefn(): Defn = {
+    implicit val pos: nir.Position = getPosition()
+    getInt() match {
+      case T.VarDefn =>
+        Defn.Var(getAttrs(), getGlobal(), getType(), getVal())
 
-    case T.ConstDefn =>
-      Defn.Const(getAttrs, getGlobal, getType, getVal)
+      case T.ConstDefn =>
+        Defn.Const(getAttrs(), getGlobal(), getType(), getVal())
 
-    case T.DeclareDefn =>
-      Defn.Declare(getAttrs, getGlobal, getType)
+      case T.DeclareDefn =>
+        Defn.Declare(getAttrs(), getGlobal(), getType())
 
-    case T.DefineDefn =>
-      Defn.Define(getAttrs, getGlobal, getType, getInsts)
+      case T.DefineDefn =>
+        Defn.Define(getAttrs(), getGlobal(), getType(), getInsts())
 
-    case T.StructDefn =>
-      Defn.Struct(getAttrs, getGlobal, getTypes)
+      case T.TraitDefn =>
+        Defn.Trait(getAttrs(), getGlobal(), getGlobals())
 
-    case T.TraitDefn =>
-      Defn.Trait(getAttrs, getGlobal, getGlobals)
+      case T.ClassDefn =>
+        Defn.Class(getAttrs(), getGlobal(), getGlobalOpt(), getGlobals())
 
-    case T.ClassDefn =>
-      Defn.Class(getAttrs, getGlobal, getGlobalOpt, getGlobals)
-
-    case T.ModuleDefn =>
-      Defn.Module(getAttrs, getGlobal, getGlobalOpt, getGlobals)
-  }
-
-  private def getGlobals(): Seq[Global]      = getSeq(getGlobal)
-  private def getGlobalOpt(): Option[Global] = getOpt(getGlobal)
-  private def getGlobal(): Global = {
-    val name = getGlobalNoDep
-    if (name != Global.None) {
-      deps += Dep.Direct(name)
+      case T.ModuleDefn =>
+        Defn.Module(getAttrs(), getGlobal(), getGlobalOpt(), getGlobals())
     }
-    name
   }
 
-  private def getGlobalNoDep(): Global = getInt match {
+  private def getGlobals(): Seq[Global]      = getSeq(getGlobal())
+  private def getGlobalOpt(): Option[Global] = getOpt(getGlobal())
+  private def getGlobal(): Global = getInt match {
     case T.NoneGlobal =>
       Global.None
     case T.TopGlobal =>
-      Global.stripImplClassTrailingDollar(Global.Top(getString))
+      Global.Top(getUTF8String())
     case T.MemberGlobal =>
-      Global.Member(getGlobal, getString)
+      Global.Member(Global.Top(getUTF8String()), getSig())
   }
 
-  private def getLocal(): Local = {
-    val scope = getString // ignored
-    Local(getInt)
-  }
+  private def getSig(): Sig =
+    new Sig(getUTF8String())
 
-  private def getNexts(): Seq[Next] = getSeq(getNext)
+  private def getLocal(): Local =
+    Local(getLong)
+
+  private def getNexts(): Seq[Next] = getSeq(getNext())
   private def getNext(): Next = getInt match {
     case T.NoneNext   => Next.None
-    case T.UnwindNext => Next.Unwind(getLocal)
-    case T.LabelNext  => Next.Label(getLocal, getVals)
-    case T.CaseNext   => Next.Case(getVal, getLocal)
+    case T.UnwindNext => Next.Unwind(getParam(), getNext())
+    case T.CaseNext   => Next.Case(getVal(), getNext())
+    case T.LabelNext  => Next.Label(getLocal(), getVals())
   }
 
   private def getOp(): Op = getInt match {
-    case T.CallOp       => Op.Call(getType, getVal, getVals, getNext)
-    case T.LoadOp       => Op.Load(getType, getVal, isVolatile = false)
-    case T.StoreOp      => Op.Store(getType, getVal, getVal, isVolatile = false)
-    case T.ElemOp       => Op.Elem(getType, getVal, getVals)
-    case T.ExtractOp    => Op.Extract(getVal, getInts)
-    case T.InsertOp     => Op.Insert(getVal, getVal, getInts)
-    case T.StackallocOp => Op.Stackalloc(getType, getVal)
-    case T.BinOp        => Op.Bin(getBin, getType, getVal, getVal)
-    case T.CompOp       => Op.Comp(getComp, getType, getVal, getVal)
-    case T.ConvOp       => Op.Conv(getConv, getType, getVal)
-    case T.SelectOp     => Op.Select(getVal, getVal, getVal)
+    case T.CallOp       => Op.Call(getType(), getVal(), getVals())
+    case T.LoadOp       => Op.Load(getType(), getVal())
+    case T.StoreOp      => Op.Store(getType(), getVal(), getVal())
+    case T.ElemOp       => Op.Elem(getType(), getVal(), getVals())
+    case T.ExtractOp    => Op.Extract(getVal(), getInts())
+    case T.InsertOp     => Op.Insert(getVal(), getVal(), getInts())
+    case T.StackallocOp => Op.Stackalloc(getType(), getVal())
+    case T.BinOp        => Op.Bin(getBin(), getType(), getVal(), getVal())
+    case T.CompOp       => Op.Comp(getComp(), getType(), getVal(), getVal())
+    case T.ConvOp       => Op.Conv(getConv(), getType(), getVal())
 
-    case T.ClassallocOp => Op.Classalloc(getGlobal)
-    case T.FieldOp      => Op.Field(getVal, getGlobal)
-    case T.MethodOp     => Op.Method(getVal, getGlobal)
-    case T.DynmethodOp =>
-      val dynmethod = Op.Dynmethod(getVal, getString)
-      dyns += dynmethod.signature
-      dynmethod
-    case T.ModuleOp  => Op.Module(getGlobal, getNext)
-    case T.AsOp      => Op.As(getType, getVal)
-    case T.IsOp      => Op.Is(getType, getVal)
-    case T.CopyOp    => Op.Copy(getVal)
-    case T.SizeofOp  => Op.Sizeof(getType)
-    case T.ClosureOp => Op.Closure(getType, getVal, getVals)
-    case T.BoxOp     => Op.Box(getType, getVal)
-    case T.UnboxOp   => Op.Unbox(getType, getVal)
+    case T.ClassallocOp => Op.Classalloc(getGlobal())
+    case T.FieldloadOp  => Op.Fieldload(getType(), getVal(), getGlobal())
+    case T.FieldstoreOp =>
+      Op.Fieldstore(getType(), getVal(), getGlobal(), getVal())
+    case T.MethodOp     => Op.Method(getVal(), getSig())
+    case T.DynmethodOp  => Op.Dynmethod(getVal(), getSig())
+    case T.ModuleOp     => Op.Module(getGlobal())
+    case T.AsOp         => Op.As(getType(), getVal())
+    case T.IsOp         => Op.Is(getType(), getVal())
+    case T.CopyOp       => Op.Copy(getVal())
+    case T.SizeofOp     => Op.Sizeof(getType())
+    case T.BoxOp        => Op.Box(getType(), getVal())
+    case T.UnboxOp      => Op.Unbox(getType(), getVal())
+    case T.VarOp        => Op.Var(getType())
+    case T.VarloadOp    => Op.Varload(getVal())
+    case T.VarstoreOp   => Op.Varstore(getVal(), getVal())
+    case T.ArrayallocOp => Op.Arrayalloc(getType(), getVal())
+    case T.ArrayloadOp  => Op.Arrayload(getType(), getVal(), getVal())
+    case T.ArraystoreOp =>
+      Op.Arraystore(getType(), getVal(), getVal(), getVal())
+    case T.ArraylengthOp => Op.Arraylength(getVal())
   }
 
-  private def getParams(): Seq[Val.Local] = getSeq(getParam)
-  private def getParam(): Val.Local       = Val.Local(getLocal, getType)
+  private def getParams(): Seq[Val.Local] = getSeq(getParam())
+  private def getParam(): Val.Local       = Val.Local(getLocal(), getType())
 
-  private def getTypes(): Seq[Type] = getSeq(getType)
+  private def getTypes(): Seq[Type] = getSeq(getType())
   private def getType(): Type = getInt match {
-    case T.NoneType     => Type.None
-    case T.VoidType     => Type.Void
-    case T.VarargType   => Type.Vararg
-    case T.PtrType      => Type.Ptr
-    case T.BoolType     => Type.Bool
-    case T.CharType     => Type.Char
-    case T.ByteType     => Type.Byte
-    case T.UByteType    => Type.UByte
-    case T.ShortType    => Type.Short
-    case T.UShortType   => Type.UShort
-    case T.IntType      => Type.Int
-    case T.UIntType     => Type.UInt
-    case T.LongType     => Type.Long
-    case T.ULongType    => Type.ULong
-    case T.FloatType    => Type.Float
-    case T.DoubleType   => Type.Double
-    case T.ArrayType    => Type.Array(getType, getInt)
-    case T.FunctionType => Type.Function(getTypes, getType)
-    case T.StructType   => Type.Struct(getGlobal, getTypes)
+    case T.VarargType      => Type.Vararg
+    case T.PtrType         => Type.Ptr
+    case T.BoolType        => Type.Bool
+    case T.CharType        => Type.Char
+    case T.ByteType        => Type.Byte
+    case T.ShortType       => Type.Short
+    case T.IntType         => Type.Int
+    case T.LongType        => Type.Long
+    case T.FloatType       => Type.Float
+    case T.DoubleType      => Type.Double
+    case T.ArrayValueType  => Type.ArrayValue(getType(), getInt)
+    case T.StructValueType => Type.StructValue(getTypes())
+    case T.FunctionType    => Type.Function(getTypes(), getType())
 
-    case T.UnitType    => Type.Unit
+    case T.NullType    => Type.Null
     case T.NothingType => Type.Nothing
-    case T.ClassType   => Type.Class(getGlobal)
-    case T.TraitType   => Type.Trait(getGlobal)
-    case T.ModuleType  => Type.Module(getGlobal)
+    case T.VirtualType => Type.Virtual
+    case T.VarType     => Type.Var(getType())
+    case T.UnitType    => Type.Unit
+    case T.ArrayType   => Type.Array(getType(), getBool())
+    case T.RefType     => Type.Ref(getGlobal(), getBool(), getBool())
   }
 
-  private def getVals(): Seq[Val] = getSeq(getVal)
+  private def getVals(): Seq[Val] = getSeq(getVal())
   private def getVal(): Val = getInt match {
-    case T.NoneVal   => Val.None
-    case T.TrueVal   => Val.True
-    case T.FalseVal  => Val.False
-    case T.ZeroVal   => getZero()
-    case T.UndefVal  => Val.Undef(getType)
-    case T.ByteVal   => Val.Byte(get)
-    case T.ShortVal  => Val.Short(getShort)
-    case T.IntVal    => Val.Int(getInt)
-    case T.LongVal   => Val.Long(getLong)
-    case T.FloatVal  => Val.Float(getFloat)
-    case T.DoubleVal => Val.Double(getDouble)
-    case T.StructVal => Val.Struct(getGlobal, getVals)
-    case T.ArrayVal  => Val.Array(getType, getVals)
-    case T.CharsVal  => Val.Chars(getString)
-    case T.LocalVal  => Val.Local(getLocal, getType)
-    case T.GlobalVal => Val.Global(getGlobal, getType)
+    case T.TrueVal        => Val.True
+    case T.FalseVal       => Val.False
+    case T.NullVal        => Val.Null
+    case T.ZeroVal        => Val.Zero(getType())
+    case T.CharVal        => Val.Char(getShort.toChar)
+    case T.ByteVal        => Val.Byte(get)
+    case T.ShortVal       => Val.Short(getShort)
+    case T.IntVal         => Val.Int(getInt)
+    case T.LongVal        => Val.Long(getLong)
+    case T.FloatVal       => Val.Float(getFloat)
+    case T.DoubleVal      => Val.Double(getDouble)
+    case T.StructValueVal => Val.StructValue(getVals())
+    case T.ArrayValueVal  => Val.ArrayValue(getType(), getVals())
+    case T.CharsVal       => Val.Chars(getBytes().toIndexedSeq)
+    case T.LocalVal       => Val.Local(getLocal(), getType())
+    case T.GlobalVal      => Val.Global(getGlobal(), getType())
 
-    case T.UnitVal   => Val.Unit
-    case T.ConstVal  => Val.Const(getVal)
-    case T.StringVal => Val.String(getString)
+    case T.UnitVal  => Val.Unit
+    case T.ConstVal => Val.Const(getVal())
+    case T.StringVal =>
+      Val.String {
+        val chars = Array.fill(getInt)(getChar)
+        new String(chars)
+      }
+    case T.VirtualVal => Val.Virtual(getLong)
+    case T.ClassOfVal => Val.ClassOf(getGlobal())
   }
-  private def getZero(): Val = {
-    val ty = getType
-    ty match {
-      case Type.Ptr | _: Type.RefKind => Val.Null
-      case _                          => Val.Zero(ty)
+
+  private def getLinktimeCondition(): LinktimeCondition = getInt() match {
+    case LinktimeCondition.Tag.SimpleCondition =>
+      LinktimeCondition.SimpleCondition(propertyName = getUTF8String(),
+                                        comparison = getComp(),
+                                        value = getVal())(getPosition())
+
+    case LinktimeCondition.Tag.ComplexCondition =>
+      LinktimeCondition.ComplexCondition(
+        op = getBin(),
+        left = getLinktimeCondition(),
+        right = getLinktimeCondition())(getPosition())
+
+    case n => util.unsupported(s"Unknown linktime condition tag: ${n}")
+  }
+
+  // Ported from Scala.js
+  def getPosition(): Position = {
+    import PositionFormat._
+
+    def readPosition(): Position = {
+      val first = get()
+      if (first == FormatNoPositionValue) {
+        Position.NoPosition
+      } else {
+        val result = if ((first & FormatFullMask) == FormatFullMaskValue) {
+          val file   = files(getInt())
+          val line   = getInt()
+          val column = getInt()
+          Position(file, line, column)
+        } else {
+          assert(lastPosition != Position.NoPosition,
+                 "Position format error: first position must be full")
+          if ((first & Format1Mask) == Format1MaskValue) {
+            val columnDiff = first >> Format1Shift
+            Position(lastPosition.source,
+                     lastPosition.line,
+                     lastPosition.column + columnDiff)
+          } else if ((first & Format2Mask) == Format2MaskValue) {
+            val lineDiff = first >> Format2Shift
+            val column   = get() & 0xff // unsigned
+            Position(lastPosition.source, lastPosition.line + lineDiff, column)
+          } else {
+            assert(
+              (first & Format3Mask) == Format3MaskValue,
+              s"Position format error: first byte $first does not match any format")
+            val lineDiff = getShort()
+            val column   = get() & 0xff // unsigned
+            Position(lastPosition.source, lastPosition.line + lineDiff, column)
+          }
+        }
+        lastPosition = result
+        result
+      }
     }
+
+    readPosition()
   }
 }

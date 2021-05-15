@@ -22,10 +22,13 @@ class ArrayList[E] private (private[this] var inner: Array[Any],
             "Illegal Capacity: " + initialCapacity)
         }
         val initialArr =
-          Array.ofDim[Any](initialCollection.size() max initialCapacity)
-        import scala.collection.JavaConverters._
-        initialCollection.asScala
-          .copyToArray(initialArr)
+          Array.ofDim[Any](initialCollection.size().max(initialCapacity))
+
+        System.arraycopy(initialCollection.toArray(),
+                         0,
+                         initialArr,
+                         0,
+                         initialCollection.size())
         initialArr
       },
       initialCollection.size()
@@ -72,13 +75,11 @@ class ArrayList[E] private (private[this] var inner: Array[Any],
 
   override def lastIndexOf(o: Any): Int = inner.lastIndexOf(o)
 
-  override def contains(o: Any): Boolean = super.contains(o)
-
   // shallow-copy
   override def clone(): AnyRef = new ArrayList(inner, _size)
 
   override def toArray(): Array[AnyRef] =
-    inner.map(_.asInstanceOf[AnyRef])
+    inner.slice(0, _size).map(_.asInstanceOf[AnyRef])
 
   override def toArray[T](a: Array[T]): Array[T] =
     if (a == null)
@@ -146,6 +147,26 @@ class ArrayList[E] private (private[this] var inner: Array[Any],
         true
     }
 
+  override def removeRange(fromIndex: Int, toIndex: Int): Unit = {
+
+    // JVM documents fromIndex == toIndex as having 'no effect'
+    if (fromIndex != toIndex) {
+      if ((fromIndex < 0) || (fromIndex >= _size) || (toIndex > size())
+          || (toIndex < fromIndex)) {
+        // N.B.: JVM docs specify IndexOutOfBounds but use de facto.
+        throw new ArrayIndexOutOfBoundsException()
+      } else {
+        val srcIndex = toIndex
+        val dstIndex = fromIndex
+        val tailSize = _size - toIndex
+
+        System.arraycopy(inner, srcIndex, inner, dstIndex, tailSize)
+
+        _size -= (toIndex - fromIndex)
+      }
+    }
+  }
+
   override def clear(): Unit = {
     // fill the content of inner by null so that the elements can be garbage collected
     for (i <- (0 until _size)) {
@@ -153,15 +174,6 @@ class ArrayList[E] private (private[this] var inner: Array[Any],
     }
     _size = 0
   }
-
-  override def addAll(c: Collection[_ <: E]): Boolean =
-    super.addAll(c)
-
-  override def addAll(index: Int, c: Collection[_ <: E]): Boolean =
-    super.addAll(index, c)
-
-  override def iterator(): java.util.Iterator[E] =
-    super.iterator()
 
   // TODO: JDK 1.8
   // def forEach(action: Consumer[_ >: E]): Unit =

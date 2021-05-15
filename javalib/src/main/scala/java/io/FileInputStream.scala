@@ -1,12 +1,18 @@
 package java.io
 
-import scalanative.native._, stdlib._, stdio._, string._
-import scalanative.posix.{fcntl, unistd}, unistd._
+import scalanative.annotation.stub
+import scalanative.unsigned._
+import scalanative.unsafe._
+import scalanative.libc._, stdlib._, stdio._, string._
+import scalanative.nio.fs.UnixException
+import scalanative.posix.unistd, unistd.lseek
 import scalanative.runtime
 
-class FileInputStream(fd: FileDescriptor) extends InputStream {
+class FileInputStream(fd: FileDescriptor, file: Option[File])
+    extends InputStream {
 
-  def this(file: File) = this(FileDescriptor.openReadOnly(file))
+  def this(fd: FileDescriptor) = this(fd, None)
+  def this(file: File) = this(FileDescriptor.openReadOnly(file), Some(file))
   def this(str: String) = this(new File(str))
 
   override def available(): Int = {
@@ -17,7 +23,7 @@ class FileInputStream(fd: FileDescriptor) extends InputStream {
   }
 
   override def close(): Unit =
-    fcntl.close(fd.fd)
+    unistd.close(fd.fd)
 
   override protected def finalize(): Unit =
     close()
@@ -52,14 +58,14 @@ class FileInputStream(fd: FileDescriptor) extends InputStream {
     // we use the runtime knowledge of the array layout to avoid
     // intermediate buffer, and write straight into the array memory
     val buf       = buffer.asInstanceOf[runtime.ByteArray].at(offset)
-    val readCount = unistd.read(fd.fd, buf, count)
+    val readCount = unistd.read(fd.fd, buf, count.toUInt)
 
     if (readCount == 0) {
       // end of file
       -1
     } else if (readCount < 0) {
       // negative value (typically -1) indicates that read failed
-      throw new IOException("couldn't read from the file")
+      throw UnixException(file.fold("")(_.toString), errno.errno)
     } else {
       // successfully read readCount bytes
       readCount

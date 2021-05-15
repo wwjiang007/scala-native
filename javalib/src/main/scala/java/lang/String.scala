@@ -1,13 +1,16 @@
 package java.lang
 
-import scalanative.native._
-import scalanative.native.string.memcmp
+import scalanative.unsafe._
+import scalanative.unsigned._
+import scalanative.libc.string.memcmp
 import scalanative.runtime.CharArray
 import java.io.Serializable
 import java.util._
 import java.util.regex._
 import java.nio._
 import java.nio.charset._
+import java.util.Objects
+import scala.annotation.{switch, tailrec}
 
 final class _String()
     extends Serializable
@@ -43,15 +46,26 @@ final class _String()
     this()
     offset = 0
     val charBuffer = encoding.decode(ByteBuffer.wrap(data, start, length))
-    value = charBuffer.array
-    count = charBuffer.length
+    value = charBuffer.array()
+    count = charBuffer.length()
   }
 
   def this(data: Array[scala.Byte],
            start: Int,
            length: Int,
-           encoding: _String) =
-    this(data, start, length, Charset.forName(encoding))
+           encoding: _String) = {
+    this(
+      data,
+      start,
+      length,
+      try {
+        Charset.forName(Objects.requireNonNull(encoding))
+      } catch {
+        case e: UnsupportedCharsetException =>
+          throw new java.io.UnsupportedEncodingException(encoding)
+      }
+    )
+  }
 
   def this(data: Array[scala.Byte], start: Int, length: Int) =
     this(data, start, length, Charset.defaultCharset())
@@ -76,7 +90,7 @@ final class _String()
       count = length
       System.arraycopy(data, start, value, 0, count)
     } else {
-      throw new IndexOutOfBoundsException()
+      throw new StringIndexOutOfBoundsException()
     }
   }
 
@@ -97,17 +111,17 @@ final class _String()
     count = string.length()
   }
 
-  def this(sb: StringBuffer) {
+  def this(sb: StringBuffer) = {
     this()
     offset = 0
-    value = sb.getValue
-    count = sb.length
+    value = sb.getValue()
+    count = sb.length()
   }
 
-  def this(codePoints: Array[Int], offset: Int, count: Int) {
+  def this(codePoints: Array[Int], offset: Int, count: Int) = {
     this()
     if (offset < 0 || count < 0 || offset > codePoints.length - count) {
-      throw new IndexOutOfBoundsException()
+      throw new StringIndexOutOfBoundsException()
     } else {
       this.offset = 0
       this.value = new Array[Char](count * 2)
@@ -123,10 +137,10 @@ final class _String()
     }
   }
 
-  def this(sb: java.lang.StringBuilder) {
+  def this(sb: java.lang.StringBuilder) = {
     this()
     offset = 0
-    count = sb.length
+    count = sb.length()
     value = new Array[Char](count)
     sb.getChars(0, count, value, 0)
   }
@@ -223,10 +237,16 @@ final class _String()
             false
           } else {
             val data1 =
-              value.asInstanceOf[CharArray].at(offset).cast[Ptr[scala.Byte]]
+              value
+                .asInstanceOf[CharArray]
+                .at(offset)
+                .asInstanceOf[Ptr[scala.Byte]]
             val data2 =
-              s.value.asInstanceOf[CharArray].at(s.offset).cast[Ptr[scala.Byte]]
-            memcmp(data1, data2, count * 2) == 0
+              s.value
+                .asInstanceOf[CharArray]
+                .at(s.offset)
+                .asInstanceOf[Ptr[scala.Byte]]
+            memcmp(data1, data2, (count * 2).toUInt) == 0
           }
         }
       }
@@ -291,9 +311,15 @@ final class _String()
   }
 
   def getBytes(encoding: _String): Array[scala.Byte] = {
-    val charset = Charset.forName(encoding)
-    val buffer  = charset.encode(CharBuffer.wrap(value, offset, count))
-    val bytes   = new Array[scala.Byte](buffer.limit())
+    val charset =
+      try {
+        Charset.forName(encoding)
+      } catch {
+        case e: UnsupportedCharsetException =>
+          throw new java.io.UnsupportedEncodingException(encoding)
+      }
+    val buffer = charset.encode(CharBuffer.wrap(value, offset, count))
+    val bytes  = new Array[scala.Byte](buffer.limit())
     buffer.get(bytes)
     bytes
   }
@@ -462,7 +488,8 @@ final class _String()
           }
           var o1 = offset + i
           var o2 = subOffset
-          while ({ o2 += 1; o2 } < end && value({ o1 += 1; o1 }) == target(o2)) ()
+          while ({ o2 += 1; o2 } < end && value({ o1 += 1; o1 }) == target(o2))
+            ()
           if (o2 == end) {
             return i
           }
@@ -575,9 +602,9 @@ final class _String()
 
       val rs = replacement.toString
 
-      if (ts.isEmpty) {
+      if (ts.isEmpty()) {
         val buffer =
-          new java.lang.StringBuilder(count + (rs.length * (count + 1)))
+          new java.lang.StringBuilder(count + (rs.length() * (count + 1)))
         buffer.append(rs)
 
         var i = 0
@@ -591,7 +618,7 @@ final class _String()
       }
 
       val buffer = new java.lang.StringBuilder(count + rs.length)
-      val tl     = target.length
+      val tl     = target.length()
       var tail   = 0
       do {
         buffer.append(value, offset + tail, index - tail)
@@ -641,21 +668,320 @@ final class _String()
     buffer
   }
 
-  def toLowerCase(locale: Locale): _String =
-    toCase(locale, Character.toLowerCase)
+  /* Ported from Scala.js, commit: ac38a148, dated: 2020-09-25
+   *
+   * The overloads without an explicit locale use the default locale, which is
+   * the root locale by specification. They are implemented by direct
+   * delegation to ECMAScript's `toLowerCase()` and `toUpperCase()`, which are
+   * specified as locale-insensitive, therefore equivalent to the root locale.
+   *
+   * It turns out virtually every locale behaves in the same way as the root
+   * locale for default case algorithms. Only Lithuanian (lt), Turkish (tr)
+   * and Azeri (az) have different behaviors.
+   *
+   * The overloads with a `Locale` specifically test for those three languages
+   * and delegate to dedicated methods to handle them. Those methods start by
+   * handling their respective special cases, then delegate to the locale-
+   * insensitive version. The special cases are specified in the Unicode
+   * reference file at
+   *
+   *   https://unicode.org/Public/13.0.0/ucd/SpecialCasing.txt
+   *
+   * That file first contains a bunch of locale-insensitive special cases,
+   * which we do not need to handle. Only the last two sections about locale-
+   * sensitive special-cases are important for us.
+   *
+   * Some of the rules are further context-sensitive, using predicates that are
+   * defined in Section 3.13 "Default Case Algorithms" of the Unicode Standard,
+   * available at
+   *
+   *   http://www.unicode.org/versions/Unicode13.0.0/
+   *
+   * We based the implementations on Unicode 13.0.0. It is worth noting that
+   * there has been no non-comment changes in the SpecialCasing.txt file
+   * between Unicode 4.1.0 and 13.0.0 (perhaps even earlier; the version 4.1.0
+   * is the earliest that is easily accessible).
+   */
+  def toLowerCase(locale: Locale): String = {
+    locale.getLanguage() match {
+      case "lt"        => toLowerCaseLithuanian()
+      case "tr" | "az" => toLowerCaseTurkishAndAzeri()
+      case _           => toLowerCase()
+    }
+  }
 
-  def toLowerCase(): _String = toLowerCase(Locale.getDefault)
+  private def toLowerCaseLithuanian(): String = {
+    /* Relevant excerpt from SpecialCasing.txt
+     *
+     * # Lithuanian
+     *
+     * # Lithuanian retains the dot in a lowercase i when followed by accents.
+     *
+     * [...]
+     *
+     * # Introduce an explicit dot above when lowercasing capital I's and J's
+     * # whenever there are more accents above.
+     * # (of the accents used in Lithuanian: grave, acute, tilde above, and ogonek)
+     *
+     * 0049; 0069 0307; 0049; 0049; lt More_Above; # LATIN CAPITAL LETTER I
+     * 004A; 006A 0307; 004A; 004A; lt More_Above; # LATIN CAPITAL LETTER J
+     * 012E; 012F 0307; 012E; 012E; lt More_Above; # LATIN CAPITAL LETTER I WITH OGONEK
+     * 00CC; 0069 0307 0300; 00CC; 00CC; lt; # LATIN CAPITAL LETTER I WITH GRAVE
+     * 00CD; 0069 0307 0301; 00CD; 00CD; lt; # LATIN CAPITAL LETTER I WITH ACUTE
+     * 0128; 0069 0307 0303; 0128; 0128; lt; # LATIN CAPITAL LETTER I WITH TILDE
+     */
+
+    /* Tests whether we are in an `More_Above` context.
+     * From Table 3.17 in the Unicode standard:
+     * - Description: C is followed by a character of combining class
+     *   230 (Above) with no intervening character of combining class 0 or
+     *   230 (Above).
+     * - Regex, after C: [^\p{ccc=230}\p{ccc=0}]*[\p{ccc=230}]
+     */
+    def moreAbove(i: Int): scala.Boolean = {
+      import Character._
+      val len = length()
+
+      @tailrec def loop(j: Int): scala.Boolean = {
+        if (j == len) {
+          false
+        } else {
+          val cp = this.codePointAt(j)
+          combiningClassNoneOrAboveOrOther(cp) match {
+            case CombiningClassIsNone  => false
+            case CombiningClassIsAbove => true
+            case _                     => loop(j + Character.charCount(cp))
+          }
+        }
+      }
+
+      loop(i + 1)
+    }
+    val preprocessed = replaceCharsAtIndex { i =>
+      (this.charAt(i): @switch) match {
+        case '\u0049' if moreAbove(i) => "\u0069\u0307"
+        case '\u004A' if moreAbove(i) => "\u006A\u0307"
+        case '\u012E' if moreAbove(i) => "\u012F\u0307"
+        case '\u00CC'                 => "\u0069\u0307\u0300"
+        case '\u00CD'                 => "\u0069\u0307\u0301"
+        case '\u0128'                 => "\u0069\u0307\u0303"
+        case _                        => null
+      }
+    }
+
+    preprocessed.toLowerCase()
+  }
+
+  private def toLowerCaseTurkishAndAzeri(): String = {
+    /* Relevant excerpt from SpecialCasing.txt
+     *
+     * # Turkish and Azeri
+     *
+     * # I and i-dotless; I-dot and i are case pairs in Turkish and Azeri
+     * # The following rules handle those cases.
+     *
+     * 0130; 0069; 0130; 0130; tr; # LATIN CAPITAL LETTER I WITH DOT ABOVE
+     * 0130; 0069; 0130; 0130; az; # LATIN CAPITAL LETTER I WITH DOT ABOVE
+     *
+     * # When lowercasing, remove dot_above in the sequence I + dot_above, which will turn into i.
+     * # This matches the behavior of the canonically equivalent I-dot_above
+     *
+     * 0307; ; 0307; 0307; tr After_I; # COMBINING DOT ABOVE
+     * 0307; ; 0307; 0307; az After_I; # COMBINING DOT ABOVE
+     *
+     * # When lowercasing, unless an I is before a dot_above, it turns into a dotless i.
+     *
+     * 0049; 0131; 0049; 0049; tr Not_Before_Dot; # LATIN CAPITAL LETTER I
+     * 0049; 0131; 0049; 0049; az Not_Before_Dot; # LATIN CAPITAL LETTER I
+     */
+
+    /* Tests whether we are in an `After_I` context.
+     * From Table 3.17 in the Unicode standard:
+     * - Description: There is an uppercase I before C, and there is no
+     *   intervening combining character class 230 (Above) or 0.
+     * - Regex, before C: [I]([^\p{ccc=230}\p{ccc=0}])*
+     */
+    def afterI(i: Int): scala.Boolean = {
+      val j = skipCharsWithCombiningClassOtherThanNoneOrAboveBackwards(i)
+      j > 0 && charAt(j - 1) == 'I'
+    }
+
+    /* Tests whether we are in an `Before_Dot` context.
+     * From Table 3.17 in the Unicode standard:
+     * - Description: C is followed by combining dot above (U+0307). Any
+     *   sequence of characters with a combining class that is neither 0 nor
+     *   230 may intervene between the current character and the combining dot
+     *   above.
+     * - Regex, after C: ([^\p{ccc=230}\p{ccc=0}])*[\u0307]
+     */
+    def beforeDot(i: Int): scala.Boolean = {
+      val j = skipCharsWithCombiningClassOtherThanNoneOrAboveForwards(i + 1)
+      j != length() && charAt(j) == '\u0307'
+    }
+
+    val preprocessed = replaceCharsAtIndex { i =>
+      (this.charAt(i): @switch) match {
+        case '\u0130'                  => "\u0069"
+        case '\u0307' if afterI(i)     => ""
+        case '\u0049' if !beforeDot(i) => "\u0131"
+        case _                         => null
+      }
+    }
+
+    preprocessed.toLowerCase()
+  }
+
+  def toLowerCase(): _String = {
+    replaceCharsAtIndex { i =>
+      /* Tests whether we are in an `Final_Sigma` context.
+       * From Table 3.17 in the Unicode standard:
+       * - Description: C is preceded by a sequence consisting of a cased letter and then zero or more case-ignorable characters,
+       *     and C is not followed by a sequence consisting of zero or more case-ignorable characters and then a cased letter.
+       * - Regex:
+       *     before C: \p{cased}(\p{case-ignorable})*
+       *     after C:  !((\p{case-ignorable})*\p{cased})
+       */
+      def isFinalSigma(idx: Int): scala.Boolean = {
+        import Character._
+
+        val hasCasedBefore = {
+          val j = skipCaseIgnorableCharsBackwards(idx)
+          j > 0 && isCased(this.codePointBefore(j))
+        }
+
+        val hasCasedAfter = {
+          val j = skipCaseIgnorableCharsForwards(idx + 1)
+          j < length() && isCased(charAt(j))
+        }
+
+        hasCasedBefore && !hasCasedAfter
+      }
+
+      /* Relevant excerpt from SpecialCasing.txt
+       * # Preserve canonical equivalence for I with dot. Turkic is handled below.
+       *
+       * 0130; 0069 0307; 0130; 0130; # LATIN CAPITAL LETTER I WITH DOT ABOVE
+       * ...
+       * # Special case for final form of sigma
+       *
+       * 03A3; 03C2; 03A3; 03A3; Final_Sigma; # GREEK CAPITAL LETTER SIGMA
+       *
+       * # Note: the following cases for non-final are already in the UnicodeData.txt file.
+       *
+       * # 03A3; 03C3; 03A3; 03A3; # GREEK CAPITAL LETTER SIGMA
+       * # 03C3; 03C3; 03A3; 03A3; # GREEK SMALL LETTER SIGMA
+       * # 03C2; 03C2; 03A3; 03A3; # GREEK SMALL LETTER FINAL SIGMA
+       *
+       * # Note: the following cases are not included, since they would case-fold in lowercasing
+       *
+       * # 03C3; 03C2; 03A3; 03A3; Final_Sigma; # GREEK SMALL LETTER SIGMA
+       * # 03C2; 03C3; 03A3; 03A3; Not_Final_Sigma; # GREEK SMALL LETTER FINAL SIGMA
+       */
+      (charAt(i): @switch) match {
+        case '\u03A3' if isFinalSigma(i) => "\u03C2"
+        case '\u0130'                    => "\u0069\u0307"
+        case _                           => null
+      }
+    }.asInstanceOf[_String]
+      .toCase(Character.toLowerCase)
+  }
 
   override def toString(): String = this
 
-  def toUpperCase(locale: Locale): _String =
-    toCase(locale, Character.toUpperCase)
+  // Ported from Scala.js, commit: ac38a148, dated: 2020-09-25
+  def toUpperCase(locale: Locale): String = {
+    locale.getLanguage() match {
+      case "lt"        => toUpperCaseLithuanian()
+      case "tr" | "az" => toUpperCaseTurkishAndAzeri()
+      case _           => toUpperCase()
+    }
+  }
 
-  def toUpperCase(): _String = toUpperCase(Locale.getDefault)
+  private def toUpperCaseLithuanian(): String = {
+    /* Relevant excerpt from SpecialCasing.txt
+     *
+     * # Lithuanian
+     *
+     * # Lithuanian retains the dot in a lowercase i when followed by accents.
+     *
+     * # Remove DOT ABOVE after "i" with upper or titlecase
+     *
+     * 0307; 0307; ; ; lt After_Soft_Dotted; # COMBINING DOT ABOVE
+     */
 
-  private[this] def toCase(locale: Locale, convert: Int => Int): _String = {
+    /* Tests whether we are in an `After_Soft_Dotted` context.
+     * From Table 3.17 in the Unicode standard:
+     * - Description: There is a Soft_Dotted character before C, with no
+     *   intervening character of combining class 0 or 230 (Above).
+     * - Regex, before C: [\p{Soft_Dotted}]([^\p{ccc=230} \p{ccc=0}])*
+     *
+     * According to https://unicode.org/Public/13.0.0/ucd/PropList.txt, there
+     * are 44 code points with the Soft_Dotted property. However,
+     * experimentation on the JVM reveals that the JDK (8 and 14 were tested)
+     * only recognizes 8 code points when deciding whether to remove the 0x0307
+     * code points. The following script reproduces the list:
+
+for (cp <- 0 to Character.MAX_CODE_POINT) {
+  val input = new String(Array(cp, 0x0307, 0x0301), 0, 3)
+  val output = input.toUpperCase(new java.util.Locale("lt"))
+  if (!output.contains('\u0307'))
+    println(cp.toHexString)
+}
+
+     */
+    def afterSoftDotted(i: Int): scala.Boolean = {
+      val j = skipCharsWithCombiningClassOtherThanNoneOrAboveBackwards(i)
+      j > 0 && (codePointBefore(j) match {
+        case 0x0069 | 0x006a | 0x012f | 0x0268 | 0x0456 | 0x0458 | 0x1e2d |
+            0x1ecb =>
+          true
+        case _ => false
+      })
+    }
+
+    val preprocessed = replaceCharsAtIndex { i =>
+      (this.charAt(i): @switch) match {
+        case '\u0307' if afterSoftDotted(i) => ""
+        case _                              => null
+      }
+    }
+
+    preprocessed.toUpperCase()
+  }
+
+  private def toUpperCaseTurkishAndAzeri(): String = {
+    /* Relevant excerpt from SpecialCasing.txt
+     *
+     * # Turkish and Azeri
+     *
+     * # When uppercasing, i turns into a dotted capital I
+     *
+     * 0069; 0069; 0130; 0130; tr; # LATIN SMALL LETTER I
+     * 0069; 0069; 0130; 0130; az; # LATIN SMALL LETTER I
+     */
+
+    val preprocessed = replaceCharsAtIndex { i =>
+      (this.charAt(i): @switch) match {
+        case '\u0069' => "\u0130"
+        case _        => null
+      }
+    }
+
+    preprocessed.toUpperCase()
+  }
+
+  def toUpperCase(): _String = {
+    replaceCharsAtIndex { i =>
+      val c = this.charAt(i)
+      if (c < 0x80) null // fast-forward ASCII characters
+      else StringSpecialCasing.toUpperCase.get(c)
+    }.asInstanceOf[_String]
+      .toCase(Character.toUpperCase)
+  }
+
+  private def toCase(convert: Int => Int): _String = {
     if (count == 0) return this
-    val buf = new StringBuilder(count)
+    val buf = new java.lang.StringBuilder(count)
     var i   = offset
     while (i < offset + count) {
       val high = value(i)
@@ -684,6 +1010,106 @@ final class _String()
     buf.toString
   }
 
+  /** Replaces special characters in this string (possibly in special contexts)
+   *  by dedicated strings.
+   *
+   *  This method encodes the general pattern of
+   *
+   *  - `toLowerCaseLithuanian()`
+   *  - `toLowerCaseTurkishAndAzeri()`
+   *  - `toUpperCaseLithuanian()`
+   *  - `toUpperCaseTurkishAndAzeri()`
+   *
+   *  @param replacementAtIndex
+   *    A function from index to `String | Null`, which should return a special
+   *    replacement string for the character at the given index, or `null` if
+   *    the character at the given index is not special.
+   */
+  @inline
+  private def replaceCharsAtIndex(replacementAtIndex: Int => String): String = {
+    var prep: java.lang.StringBuilder = null
+    val len                           = this.length()
+    var i                             = 0
+    var startOfSegment                = 0
+
+    while (i != len) {
+      val replacement = replacementAtIndex(i)
+      if (replacement != null) {
+        if (prep == null) {
+          prep = new java.lang.StringBuilder(len * 2)
+        }
+        prep.append(this.substring(startOfSegment, i))
+        prep.append(replacement)
+        startOfSegment = i + 1
+      }
+      i += 1
+    }
+
+    if (startOfSegment == 0)
+      this // opt: no character needed replacing, directly return the original string
+    else
+      prep.append(this.substring(startOfSegment, i)).toString
+  }
+
+  private def skipConditionalCharsForwards(i: Int)(
+      shouldSkip: Int => scala.Boolean): Int = {
+    // scalastyle:off return
+    val len = length()
+    var j   = i
+    while (j != len) {
+      val cp = this.codePointAt(j)
+      if (!shouldSkip(cp))
+        return j
+      j += Character.charCount(cp)
+    }
+    j
+    // scalastyle:on return
+  }
+
+  private def skipConditionalCharsBackwards(i: Int)(
+      shouldSkip: Int => scala.Boolean): Int = {
+    // scalastyle:off return
+    var j = i
+    while (j > 0) {
+      val cp = this.codePointBefore(j)
+      if (!shouldSkip(cp))
+        return j
+      j -= Character.charCount(cp)
+    }
+    0
+    // scalastyle:on return
+  }
+
+  private def skipCharsWithCombiningClassOtherThanNoneOrAboveForwards(
+      i: Int): Int = {
+    skipConditionalCharsForwards(i) { cp =>
+      import Character._
+      combiningClassNoneOrAboveOrOther(cp) == CombiningClassIsOther
+    }
+  }
+
+  private def skipCharsWithCombiningClassOtherThanNoneOrAboveBackwards(
+      i: Int): Int = {
+    skipConditionalCharsBackwards(i) { cp =>
+      import Character._
+      combiningClassNoneOrAboveOrOther(cp) == CombiningClassIsOther
+    }
+  }
+
+  private def skipCaseIgnorableCharsForwards(i: Int): Int = {
+    skipConditionalCharsForwards(i) { cp =>
+      import Character._
+      isCaseIgnorable(cp)
+    }
+  }
+
+  private def skipCaseIgnorableCharsBackwards(i: Int): Int = {
+    skipConditionalCharsBackwards(i) { cp =>
+      import Character._
+      isCaseIgnorable(cp)
+    }
+  }
+
   def trim(): _String = {
     var start = offset
     val last  = offset + count - 1
@@ -705,16 +1131,16 @@ final class _String()
   }
 
   def contentEquals(sb: StringBuffer): scala.Boolean = {
-    val size = sb.length
+    val size = sb.length()
     if (count != size) {
       false
     } else {
-      regionMatches(0, new _String(0, size, sb.getValue), 0, size)
+      regionMatches(0, new _String(0, size, sb.getValue()), 0, size)
     }
   }
 
   def contentEquals(cs: CharSequence): scala.Boolean = {
-    val len = cs.length
+    val len = cs.length()
     if (len != count) {
       false
     } else if (len == 0 && count == 0) {
@@ -733,32 +1159,79 @@ final class _String()
   def replaceFirst(expr: _String, substitute: _String): _String =
     Pattern.compile(expr).matcher(this).replaceFirst(substitute)
 
+  def fastSplit(ch: Char, max: Int): Array[String] = {
+    var separatorCount = 0
+    var begin          = 0
+    var end            = 0
+    while (separatorCount + 1 != max && { end = indexOf(ch, begin); end != -1 }) {
+      separatorCount += 1
+      begin = end + 1
+    }
+    val lastPartEnd = if (max == 0 && begin == count) {
+      if (separatorCount == count) {
+        return Array.empty[String]
+      }
+      do {
+        begin -= 1
+      } while (charAt(begin - 1) == ch)
+      separatorCount -= count - begin
+      begin
+    } else {
+      count
+    }
+
+    val result = new Array[String](separatorCount + 1)
+    begin = 0
+    var i = 0
+    while (i < separatorCount) {
+      end = indexOf(ch, begin)
+      result(i) = substring(begin, end);
+      begin = end + 1
+      i += 1
+    }
+    result(separatorCount) = substring(begin, lastPartEnd)
+    result
+  }
+
+  private[this] final val REGEX_METACHARACTERS = ".$()[{^?*+\\"
+  @inline private def isRegexMeta(c: Char) =
+    REGEX_METACHARACTERS.indexOf(c) >= 0
+
   def split(expr: _String): Array[String] =
-    Pattern.compile(expr).split(this)
+    split(expr, 0)
 
   def split(expr: _String, max: Int): Array[String] =
-    Pattern.compile(expr).split(this, max)
+    if (isEmpty()) {
+      Array("")
+    } else {
+      expr.length() match {
+        case 1 if !isRegexMeta(expr.charAt(0)) => fastSplit(expr.charAt(0), max)
+        case 2 if expr.charAt(0) == '\\' && isRegexMeta(expr.charAt(1)) =>
+          fastSplit(expr.charAt(1), max)
+        case _ => Pattern.compile(expr).split(this, max)
+      }
+    }
 
   def subSequence(start: Int, end: Int): CharSequence =
     substring(start, end)
 
   def codePointAt(index: Int): Int =
     if (index < 0 || index >= count) {
-      throw new IndexOutOfBoundsException()
+      throw new StringIndexOutOfBoundsException()
     } else {
       Character.codePointAt(value, index + offset, offset + count)
     }
 
   def codePointBefore(index: Int): Int =
     if (index < 1 || index > count) {
-      throw new IndexOutOfBoundsException()
+      throw new StringIndexOutOfBoundsException()
     } else {
       Character.codePointBefore(value, index + offset)
     }
 
   def codePointCount(beginIndex: Int, endIndex: Int): Int =
     if (beginIndex < 0 || endIndex > count || beginIndex > endIndex) {
-      throw new IndexOutOfBoundsException()
+      throw new StringIndexOutOfBoundsException()
     } else {
       Character
         .codePointCount(value, beginIndex + offset, endIndex - beginIndex)
@@ -830,19 +1303,10 @@ object _String {
     if (value != null) value.toString else "null"
 
   def format(fmt: _String, args: Array[AnyRef]): _String =
-    format(Locale.getDefault(), fmt, args)
+    new Formatter().format(fmt, args).toString
 
-  def format(loc: Locale, fmt: _String, args: Array[AnyRef]): _String = {
-    if (fmt == null) {
-      throw new NullPointerException("null format argument")
-    } else {
-      val bufferSize =
-        if (args == null) fmt.length + 0
-        else fmt.length + args.length * 10
-      val f = new Formatter(new java.lang.StringBuilder(bufferSize), loc)
-      f.format(fmt, args).toString
-    }
-  }
+  def format(loc: Locale, fmt: _String, args: Array[AnyRef]): _String =
+    new Formatter(loc).format(fmt, args).toString()
 
   import scala.language.implicitConversions
   @inline private implicit def _string2string(s: _String): String =
